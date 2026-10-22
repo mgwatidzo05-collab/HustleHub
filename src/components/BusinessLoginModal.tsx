@@ -40,7 +40,7 @@ export const BusinessLoginModal: React.FC<BusinessLoginModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
@@ -59,7 +59,7 @@ export const BusinessLoginModal: React.FC<BusinessLoginModalProps> = ({
 
     setLoading(true);
     try {
-      const res = loginBusinessWithPassword(trimmedEmail, password);
+      const res = await loginBusinessWithPassword(trimmedEmail, password);
       if (!res.success) {
         setError(res.error || 'Failed to sign in to store.');
       } else {

@@ -21,7 +21,19 @@ export const getStoredAppwriteConfig = (): AppwriteConfig => {
     const raw = localStorage.getItem(STORAGE_KEY_APPWRITE);
     if (raw) {
       const parsed = JSON.parse(raw);
-      return { ...defaultAppwriteConfig, ...parsed };
+      const config = { ...defaultAppwriteConfig, ...parsed };
+      // Never allow blank values in localStorage to wipe out working Appwrite defaults
+      if (!config.projectId || typeof config.projectId !== 'string' || !config.projectId.trim()) {
+        config.projectId = defaultAppwriteConfig.projectId;
+      }
+      if (!config.databaseId || typeof config.databaseId !== 'string' || !config.databaseId.trim()) {
+        config.databaseId = defaultAppwriteConfig.databaseId;
+      }
+      if (!config.endpoint || typeof config.endpoint !== 'string' || !config.endpoint.trim()) {
+        config.endpoint = defaultAppwriteConfig.endpoint;
+      }
+      config.isConfigured = Boolean(config.projectId);
+      return config;
     }
   } catch (err) {
     console.error('Failed to read appwrite config from localStorage', err);
@@ -648,20 +660,38 @@ export const createProductInAppwrite = async (product: Product): Promise<{ succe
     ? product.images
     : ['https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?auto=format&fit=crop&w=600&q=80'];
 
+  // Ensure whatsapp number is available from product or store cache
+  let whatsapp = product.storeWhatsApp || '';
+  if (!whatsapp && typeof localStorage !== 'undefined') {
+    try {
+      const rawStores = localStorage.getItem('hustlehub_stores_live');
+      if (rawStores) {
+        const parsed = JSON.parse(rawStores);
+        const matchStore = parsed.find((s: any) => s.id === product.storeId || s.name === product.storeName);
+        if (matchStore && matchStore.whatsappNumber) {
+          whatsapp = matchStore.whatsappNumber;
+        }
+      }
+    } catch {}
+  }
+  if (!whatsapp) {
+    whatsapp = '+263712016200';
+  }
+
   const initialPayload: Record<string, any> = {
     id: product.id,
     storeId: product.storeId,
     storeName: product.storeName || '',
-    storewhatsapp: product.storeWhatsApp || '', // Appwrite products table column
-    storeWhatsApp: product.storeWhatsApp || '', // Fallback camelCase
-    store_whatsapp: product.storeWhatsApp || '', // Fallback snake_case
-    storeLocation: product.storeLocation || '',
-    storeIsVerified: Boolean(product.storeIsVerified),
+    storewhatsapp: whatsapp, // Appwrite products table column
+    storeWhatsApp: whatsapp, // Fallback camelCase
+    store_whatsapp: whatsapp, // Fallback snake_case
+    storeLocation: product.storeLocation || 'Campus',
+    storeIsVerified: product.storeIsVerified !== undefined ? Boolean(product.storeIsVerified) : true,
     title: product.title,
     description: product.description || '',
     price: Number(product.price) || 0,
     currency: product.currency || '$',
-    category: product.category || 'other_service',
+    category: product.category || 'clothing',
     isService: Boolean(product.isService),
     condition: product.condition || 'good',
     isTradeable: Boolean(product.isTradeable),

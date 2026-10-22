@@ -35,7 +35,7 @@ interface MarketplaceContextType {
   logoutAdmin: () => void;
   loginCustomer: (email: string, name: string) => void;
   loginBusiness: (email: string, name: string, storeId?: string) => void;
-  loginBusinessWithPassword: (email: string, password: string) => { success: boolean; error?: string; store?: Store };
+  loginBusinessWithPassword: (email: string, password: string) => Promise<{ success: boolean; error?: string; store?: Store }>;
   loginWithOAuth: (provider: 'google' | 'github') => Promise<void>;
   logout: () => void;
 
@@ -464,9 +464,40 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     setCurrentUser(newUser);
   };
 
-  const loginBusinessWithPassword = (email: string, password: string): { success: boolean; error?: string; store?: Store } => {
+  const loginBusinessWithPassword = async (email: string, password: string): Promise<{ success: boolean; error?: string; store?: Store }> => {
     const trimmedEmail = email.trim().toLowerCase();
-    const store = stores.find(s => s.ownerEmail.toLowerCase() === trimmedEmail);
+    const normalizeEmail = (e: string) => e.trim().toLowerCase().replace(/\.con$/i, '.com');
+
+    // 1. Try finding in current stores state with flexible matching (.com vs .con typo resilience)
+    let store = stores.find(s => {
+      const storedEmail = (s.ownerEmail || '').toLowerCase();
+      return (
+        storedEmail === trimmedEmail ||
+        normalizeEmail(storedEmail) === normalizeEmail(trimmedEmail) ||
+        (storedEmail.includes('@') && trimmedEmail.includes('@') && storedEmail.split('@')[0] === trimmedEmail.split('@')[0])
+      );
+    });
+
+    // 2. If not found in memory, fetch fresh stores directly from Appwrite Cloud
+    if (!store) {
+      try {
+        const freshStores = await fetchStoresFromAppwrite();
+        if (freshStores && freshStores.length > 0) {
+          setStores(freshStores);
+          store = freshStores.find(s => {
+            const storedEmail = (s.ownerEmail || '').toLowerCase();
+            return (
+              storedEmail === trimmedEmail ||
+              normalizeEmail(storedEmail) === normalizeEmail(trimmedEmail) ||
+              (storedEmail.includes('@') && trimmedEmail.includes('@') && storedEmail.split('@')[0] === trimmedEmail.split('@')[0])
+            );
+          });
+        }
+      } catch (err) {
+        console.warn('Failed to query Appwrite during store login:', err);
+      }
+    }
+
     if (!store) {
       return {
         success: false,
