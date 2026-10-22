@@ -1,0 +1,32 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+  
+  body {
+    background-color: #0A0D14;
+    color: #F3F4F6;
+    overflow-x: hidden;
+  }
+}
+
+/* Custom scrollbars for clean modern dark look */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0D111C;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #232B3E;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3B4663;
+}

@@ -1,0 +1,6 @@
+{
+  "name": "HustleHub - University Student Marketplace",
+  "description": "Buy, sell, and trade textbooks, electronics, dorm essentials, and student services with WhatsApp direct ordering.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
