@@ -43,7 +43,9 @@ export interface Store {
   whatsappClicks: number;
   profileViews: number;
   isVerified: boolean;
-  verificationStatus: 'pending' | 'verified' | 'rejected';
+  verificationStatus: 'pending' | 'verified' | 'rejected' | 'unverified';
+  verificationRequested?: boolean; // Store requested verification tick badge
+  verificationRequestDate?: string;
   isFrozen: boolean;
   freezeReason?: string;
   isFeatured: boolean; // Paid for home page featured spotlight

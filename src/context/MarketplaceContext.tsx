@@ -16,6 +16,7 @@ import {
   triggerAppwriteOAuth,
   fetchStoresFromAppwrite,
   fetchProductsFromAppwrite,
+  fetchReportsFromAppwrite,
   createStoreInAppwrite,
   updateStoreInAppwrite,
   deleteStoreInAppwrite,
@@ -23,6 +24,7 @@ import {
   updateProductInAppwrite,
   deleteProductInAppwrite,
   createReportInAppwrite,
+  updateReportInAppwrite,
   createAnalyticsEventInAppwrite,
   subscribeToMarketplaceRealtime,
 } from '../lib/appwrite';
@@ -44,6 +46,7 @@ interface MarketplaceContextType {
   currentStore: Store | null;
   registerStore: (storeData: Omit<Store, 'id' | 'ownerId' | 'whatsappClicks' | 'profileViews' | 'isVerified' | 'verificationStatus' | 'isFrozen' | 'isFeatured' | 'hasPremiumLimit' | 'createdAt' | 'rating' | 'reviewCount'>) => Promise<Store>;
   updateStoreProfile: (storeId: string, updates: Partial<Store>) => void;
+  requestStoreVerification: (storeId: string) => void;
   verifyStore: (storeId: string) => void;
   rejectStore: (storeId: string) => void;
   freezeStore: (storeId: string, reason?: string) => void;
@@ -242,21 +245,46 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
 
     try {
-      const [remoteStores, remoteProducts] = await Promise.all([
+      const [remoteStores, remoteProducts, remoteReports] = await Promise.all([
         fetchStoresFromAppwrite(),
         fetchProductsFromAppwrite(),
+        fetchReportsFromAppwrite(),
       ]);
 
       if (remoteStores && remoteStores.length > 0) {
         const nonDemoRemote = remoteStores.filter(s => s && s.id && !s.id.startsWith('store-demo'));
         setStores(prev => {
-          const merged = [...nonDemoRemote];
+          const localMap = new Map<string, Store>(prev.map(s => [s.id, s]));
+          const merged = nonDemoRemote.map(remoteStore => {
+            const localStore = localMap.get(remoteStore.id);
+            if (!localStore) return remoteStore;
+            return {
+              ...remoteStore,
+              featuredRequested: remoteStore.featuredRequested || (localStore.featuredRequested && !remoteStore.isFeatured),
+              featuredRequestDate: remoteStore.featuredRequestDate || localStore.featuredRequestDate,
+              premiumRequested: remoteStore.premiumRequested || (localStore.premiumRequested && !remoteStore.hasPremiumLimit),
+              premiumRequestDate: remoteStore.premiumRequestDate || localStore.premiumRequestDate,
+              verificationRequested: remoteStore.verificationRequested || (localStore.verificationRequested && !remoteStore.isVerified),
+              verificationRequestDate: remoteStore.verificationRequestDate || localStore.verificationRequestDate,
+              verificationStatus: remoteStore.verificationStatus || localStore.verificationStatus || (remoteStore.isVerified ? 'verified' : 'unverified'),
+            };
+          });
+
           for (const s of prev) {
             if (s && s.id && !s.id.startsWith('store-demo') && !merged.some(m => m.id === s.id)) {
               merged.push(s);
             }
           }
           return merged;
+        });
+      }
+
+      if (remoteReports && remoteReports.length > 0) {
+        setReports(prev => {
+          const map = new Map<string, ReportedContent>();
+          prev.forEach(r => map.set(r.id, r));
+          remoteReports.forEach(r => map.set(r.id, r));
+          return Array.from(map.values());
         });
       }
 
@@ -378,6 +406,13 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         const freshProducts = await fetchProductsFromAppwrite();
         if (freshProducts && freshProducts.length > 0 && isSubscribed) {
           setProducts(freshProducts);
+        }
+      },
+      onReportChange: async () => {
+        if (!isSubscribed) return;
+        const freshReports = await fetchReportsFromAppwrite();
+        if (freshReports && isSubscribed) {
+          setReports(freshReports);
         }
       },
     });
@@ -555,7 +590,7 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     ? stores.find(s => s.id === currentUser.storeId) || null
     : stores.find(s => s.ownerEmail.toLowerCase() === currentUser?.email.toLowerCase()) || null;
 
-  // Store Registration Flow - Marks store as active/verified so products appear immediately!
+  // Store Registration Flow - New stores register without verification tick until requested and approved!
   const registerStore = async (storeData: Omit<Store, 'id' | 'ownerId' | 'whatsappClicks' | 'profileViews' | 'isVerified' | 'verificationStatus' | 'isFrozen' | 'isFeatured' | 'hasPremiumLimit' | 'createdAt' | 'rating' | 'reviewCount'>): Promise<Store> => {
     const ownerId = currentUser?.id || 'biz-' + Date.now();
     const newStore: Store = {
@@ -564,8 +599,9 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       ownerId,
       whatsappClicks: 0,
       profileViews: 1,
-      isVerified: true, // Mark verified so store and its products are immediately live on the marketplace!
-      verificationStatus: 'verified',
+      isVerified: false, // Must request verification tick to get verified badge
+      verificationStatus: 'unverified',
+      verificationRequested: false,
       isFrozen: false,
       isFeatured: false,
       hasPremiumLimit: false,
@@ -616,27 +652,52 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
   };
 
+  const requestStoreVerification = (storeId: string) => {
+    const updates = {
+      verificationRequested: true,
+      verificationRequestDate: new Date().toISOString(),
+      verificationStatus: 'pending' as const,
+    };
+    setStores(prev =>
+      prev.map(s => (s.id === storeId ? { ...s, ...updates } : s))
+    );
+    updateStoreInAppwrite(storeId, updates);
+  };
+
   const verifyStore = (storeId: string) => {
+    const updates = {
+      isVerified: true,
+      verificationStatus: 'verified' as const,
+      verificationRequested: false,
+    };
     setStores(prev =>
       prev.map(s =>
-        s.id === storeId ? { ...s, isVerified: true, verificationStatus: 'verified' } : s
+        s.id === storeId ? { ...s, ...updates } : s
       )
     );
     setProducts(prev =>
       prev.map(p => (p.storeId === storeId ? { ...p, storeIsVerified: true } : p))
     );
     // Sync to Appwrite
-    updateStoreInAppwrite(storeId, { isVerified: true, verificationStatus: 'verified' });
+    updateStoreInAppwrite(storeId, updates);
   };
 
   const rejectStore = (storeId: string) => {
+    const updates = {
+      isVerified: false,
+      verificationStatus: 'rejected' as const,
+      verificationRequested: false,
+    };
     setStores(prev =>
       prev.map(s =>
-        s.id === storeId ? { ...s, isVerified: false, verificationStatus: 'rejected' } : s
+        s.id === storeId ? { ...s, ...updates } : s
       )
     );
+    setProducts(prev =>
+      prev.map(p => (p.storeId === storeId ? { ...p, storeIsVerified: false } : p))
+    );
     // Sync to Appwrite
-    updateStoreInAppwrite(storeId, { isVerified: false, verificationStatus: 'rejected' });
+    updateStoreInAppwrite(storeId, updates);
   };
 
   const freezeStore = (storeId: string, reason = 'Administrative review') => {
@@ -1003,6 +1064,7 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const updateReportStatus = (reportId: string, status: 'resolved' | 'dismissed') => {
     setReports(prev => prev.map(r => (r.id === reportId ? { ...r, status } : r)));
+    updateReportInAppwrite(reportId, status);
   };
 
   // Appwrite Config
@@ -1037,6 +1099,7 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         currentStore,
         registerStore,
         updateStoreProfile,
+        requestStoreVerification,
         verifyStore,
         rejectStore,
         freezeStore,

@@ -463,8 +463,10 @@ export const fetchStoresFromAppwrite = async (): Promise<Store[] | null> => {
       whatsappNumber: doc.whatsappNumber || doc.whatsappnumber || doc.whatsapp || doc.phone || '',
       whatsappClicks: Number(doc.whatsappClicks ?? doc.whatsappclicks ?? 0),
       profileViews: Number(doc.profileViews ?? doc.profileviews ?? 0),
-      isVerified: doc.isVerified !== undefined ? Boolean(doc.isVerified) : (doc.isverified !== undefined ? Boolean(doc.isverified) : true),
-      verificationStatus: doc.verificationStatus || doc.verificationstatus || 'verified',
+      isVerified: Boolean(doc.isVerified ?? doc.isverified ?? false),
+      verificationStatus: doc.verificationStatus || doc.verificationstatus || (doc.verificationRequested || doc.verificationrequested ? 'pending' : (doc.isVerified || doc.isverified ? 'verified' : 'unverified')),
+      verificationRequested: Boolean(doc.verificationRequested ?? doc.verificationrequested),
+      verificationRequestDate: doc.verificationRequestDate || doc.verificationrequestdate || '',
       isFrozen: Boolean(doc.isFrozen ?? doc.isfrozen),
       freezeReason: doc.freezeReason || doc.freezereason || '',
       isFeatured: Boolean(doc.isFeatured ?? doc.isfeatured),
@@ -594,10 +596,14 @@ export const createStoreInAppwrite = async (store: Store): Promise<{ success: bo
     whatsappclicks: Number(store.whatsappClicks) || 0,
     profileViews: Number(store.profileViews) || 0,
     profileviews: Number(store.profileViews) || 0,
-    isVerified: store.isVerified !== undefined ? Boolean(store.isVerified) : true,
-    isverified: store.isVerified !== undefined ? Boolean(store.isVerified) : true,
-    verificationStatus: store.verificationStatus || 'verified',
-    verificationstatus: store.verificationStatus || 'verified',
+    isVerified: Boolean(store.isVerified),
+    isverified: Boolean(store.isVerified),
+    verificationStatus: store.verificationStatus || 'unverified',
+    verificationstatus: store.verificationStatus || 'unverified',
+    verificationRequested: Boolean(store.verificationRequested),
+    verificationrequested: Boolean(store.verificationRequested),
+    verificationRequestDate: store.verificationRequestDate || '',
+    verificationrequestdate: store.verificationRequestDate || '',
     isFrozen: Boolean(store.isFrozen),
     isfrozen: Boolean(store.isFrozen),
     freezeReason: store.freezeReason || '',
@@ -634,34 +640,65 @@ export const updateStoreInAppwrite = async (storeId: string, updates: Partial<St
   const { databases } = getAppwrite();
   if (!databases || !config.projectId || !config.databaseId) return;
 
-  try {
-    const collId = config.storesCollectionId || 'stores';
-    const clean = cleanPayload(updates);
+  const collId = config.storesCollectionId || 'stores';
+  const clean = cleanPayload(updates);
+  const safeDocId = storeId.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 36);
 
-    // Provide lowercase aliases for common updates
-    if (updates.password !== undefined) {
-      clean.password = updates.password;
-      clean.pass = updates.password;
-    }
-    if (updates.ownerEmail !== undefined) {
-      clean.ownerEmail = updates.ownerEmail;
-      clean.owneremail = updates.ownerEmail;
-      clean.email = updates.ownerEmail;
-    }
-    if (updates.whatsappNumber !== undefined) {
-      clean.whatsappNumber = updates.whatsappNumber;
-      clean.whatsappnumber = updates.whatsappNumber;
-      clean.whatsapp = updates.whatsappNumber;
-    }
+  // Provide dual casing aliases
+  if (updates.isVerified !== undefined) {
+    clean.isVerified = updates.isVerified;
+    clean.isverified = updates.isVerified;
+  }
+  if (updates.verificationStatus !== undefined) {
+    clean.verificationStatus = updates.verificationStatus;
+    clean.verificationstatus = updates.verificationStatus;
+  }
+  if (updates.verificationRequested !== undefined) {
+    clean.verificationRequested = updates.verificationRequested;
+    clean.verificationrequested = updates.verificationRequested;
+  }
+  if (updates.featuredRequested !== undefined) {
+    clean.featuredRequested = updates.featuredRequested;
+    clean.featuredrequested = updates.featuredRequested;
+  }
+  if (updates.premiumRequested !== undefined) {
+    clean.premiumRequested = updates.premiumRequested;
+    clean.premiumrequested = updates.premiumRequested;
+  }
+  if (updates.isFeatured !== undefined) {
+    clean.isFeatured = updates.isFeatured;
+    clean.isfeatured = updates.isFeatured;
+  }
+  if (updates.hasPremiumLimit !== undefined) {
+    clean.hasPremiumLimit = updates.hasPremiumLimit;
+    clean.haspremiumlimit = updates.hasPremiumLimit;
+  }
 
-    await databases.updateDocument(
-      config.databaseId,
-      collId,
-      storeId.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 36),
-      clean
-    );
-  } catch (err) {
-    console.warn('Failed to sync store update to Appwrite:', err);
+  // Resilient update loop: if any attribute is rejected by Appwrite schema, drop it and retry
+  const payloadToUpdate = { ...clean };
+  for (let attempt = 0; attempt < 8; attempt++) {
+    try {
+      await databases.updateDocument(
+        config.databaseId,
+        collId,
+        safeDocId,
+        payloadToUpdate
+      );
+      return;
+    } catch (err: any) {
+      const msg = String(err?.message || '');
+      const prohibitedMatch =
+        msg.match(/attribute\s+["']?([a-zA-Z0-9_]+)["']?\s+is not allowed/i) ||
+        msg.match(/prohibited attribute\s*[:]?\s*["']?([a-zA-Z0-9_]+)["']?/i) ||
+        msg.match(/unknown attribute\s*[:]?\s*["']?([a-zA-Z0-9_]+)["']?/i);
+
+      if (prohibitedMatch && prohibitedMatch[1]) {
+        delete payloadToUpdate[prohibitedMatch[1]];
+        continue;
+      }
+      console.warn('Appwrite updateStore warning:', msg);
+      break;
+    }
   }
 };
 
@@ -761,21 +798,79 @@ export const deleteProductInAppwrite = async (productId: string): Promise<void> 
   }
 };
 
+export const fetchReportsFromAppwrite = async (): Promise<ReportedContent[] | null> => {
+  const config = getStoredAppwriteConfig();
+  const { databases } = getAppwrite();
+  if (!databases || !config.projectId || !config.databaseId) return null;
+
+  try {
+    const collId = config.reportsCollectionId || 'reports';
+    let res;
+    try {
+      res = await databases.listDocuments(config.databaseId, collId, [
+        Query.limit(100),
+        Query.orderDesc('$createdAt'),
+      ]);
+    } catch {
+      res = await databases.listDocuments(config.databaseId, collId, [
+        Query.limit(100),
+      ]);
+    }
+
+    return res.documents.map((doc: any) => ({
+      id: doc.id || doc.$id,
+      targetType: doc.targetType || doc.targettype || 'product',
+      targetId: doc.targetId || doc.targetid || '',
+      targetTitle: doc.targetTitle || doc.targettitle || 'Reported Content',
+      storeName: doc.storeName || doc.storename || '',
+      reason: doc.reason || 'other',
+      details: doc.details || '',
+      reporterEmail: doc.reporterEmail || doc.reporteremail || 'anonymous',
+      createdAt: doc.createdAt || doc.createdat || doc.$createdAt || new Date().toISOString(),
+      status: doc.status || 'pending',
+    })) as ReportedContent[];
+  } catch (err) {
+    console.warn('Appwrite fetchReportsFromAppwrite error:', err);
+    return null;
+  }
+};
+
 export const createReportInAppwrite = async (report: ReportedContent): Promise<void> => {
+  const config = getStoredAppwriteConfig();
+  const { databases } = getAppwrite();
+  if (!databases || !config.projectId || !config.databaseId) return;
+
+  const collId = config.reportsCollectionId || 'reports';
+  const initialPayload: Record<string, any> = {
+    targetType: report.targetType,
+    targettype: report.targetType,
+    targetId: report.targetId,
+    targetid: report.targetId,
+    targetTitle: report.targetTitle,
+    targettitle: report.targetTitle,
+    storeName: report.storeName || '',
+    storename: report.storeName || '',
+    reason: report.reason,
+    details: report.details,
+    reporterEmail: report.reporterEmail || '',
+    reporteremail: report.reporterEmail || '',
+    status: report.status || 'pending',
+  };
+
+  await resilientCreateDocument(config.databaseId, collId, report.id, initialPayload);
+};
+
+export const updateReportInAppwrite = async (reportId: string, status: 'resolved' | 'dismissed'): Promise<void> => {
   const config = getStoredAppwriteConfig();
   const { databases } = getAppwrite();
   if (!databases || !config.projectId || !config.databaseId) return;
 
   try {
     const collId = config.reportsCollectionId || 'reports';
-    await databases.createDocument(
-      config.databaseId,
-      collId,
-      (report.id || ID.unique()).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 36),
-      cleanPayload(report)
-    );
+    const safeDocId = reportId.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 36);
+    await databases.updateDocument(config.databaseId, collId, safeDocId, { status });
   } catch (err) {
-    console.warn('Failed to sync report to Appwrite:', err);
+    console.warn('Failed to sync report status update to Appwrite:', err);
   }
 };
 
