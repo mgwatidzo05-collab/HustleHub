@@ -279,8 +279,8 @@ export const resilientCreateDocument = async (
       // Check 3: Prohibited attribute ("Attribute 'xyz' is not allowed")
       const prohibitedMatch =
         msg.match(/attribute\s+["']?([a-zA-Z0-9_]+)["']?\s+is not allowed/i) ||
-        msg.match(/prohibited attribute:\s*["']?([a-zA-Z0-9_]+)["']?/i) ||
-        msg.match(/unknown attribute:\s*["']?([a-zA-Z0-9_]+)["']?/i) ||
+        msg.match(/prohibited attribute\s*[:]?\s*["']?([a-zA-Z0-9_]+)["']?/i) ||
+        msg.match(/unknown attribute\s*[:]?\s*["']?([a-zA-Z0-9_]+)["']?/i) ||
         msg.match(/attribute_not_found.*?([a-zA-Z0-9_]+)/i) ||
         msg.match(/invalid document structure.*?attribute\s+["']?([a-zA-Z0-9_]+)["']?/i);
 
@@ -291,8 +291,7 @@ export const resilientCreateDocument = async (
 
         const lowerAttr = attrName.toLowerCase().replace(/[^a-z0-9]/g, '');
 
-        // If lowercase attribute was rejected, try camelCase alternate (e.g. storewhatsapp -> storeWhatsApp)
-        // If camelCase was rejected, try lowercase alternate (e.g. storeWhatsApp -> storewhatsapp)
+        // If camelCase was rejected, try lowercase alternate; if lowercase was rejected, try camelCase alternate
         const alternateKey = attrName === lowerAttr
           ? Object.keys(initialPayload).find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === lowerAttr && k !== attrName)
           : lowerAttr;
@@ -317,10 +316,11 @@ export const resilientCreateDocument = async (
         continue;
       }
 
-      // Check 3B: Missing required attribute ("Attribute 'xyz' is required")
+      // Check 3B: Missing required attribute ("missing required attribute 'xyz'")
       const requiredMatch =
-        msg.match(/attribute\s+["']?([a-zA-Z0-9_]+)["']?\s+is required/i) ||
-        msg.match(/missing required attribute:\s*["']?([a-zA-Z0-9_]+)["']?/i) ||
+        msg.match(/missing required attribute\s*[:]?\s*["']?([a-zA-Z0-9_]+)["']?/i) ||
+        msg.match(/attribute\s+["']?([a-zA-Z0-9_]+)["']?\s+(?:is required|is missing|cannot be empty)/i) ||
+        msg.match(/required attribute\s*[:]?\s*["']?([a-zA-Z0-9_]+)["']?/i) ||
         msg.match(/attribute_required.*?([a-zA-Z0-9_]+)/i);
 
       if (requiredMatch && requiredMatch[1]) {
@@ -338,14 +338,14 @@ export const resilientCreateDocument = async (
 
         // Semantic field fallbacks
         if (foundVal === undefined) {
-          if (lowerReq.includes('whatsapp') || lowerReq.includes('phone')) {
+          if (lowerReq.includes('store') && lowerReq.includes('id')) {
+            foundVal = initialPayload.storeId || initialPayload.storeid || '';
+          } else if (lowerReq.includes('whatsapp') || lowerReq.includes('phone')) {
             foundVal = initialPayload.storewhatsapp || initialPayload.storeWhatsApp || initialPayload.whatsappNumber || initialPayload.whatsapp || '';
-          } else if (lowerReq.includes('store') && lowerReq.includes('id')) {
-            foundVal = initialPayload.storeid || initialPayload.storeId || '';
           } else if (lowerReq.includes('image') || lowerReq.includes('photo')) {
             foundVal = Array.isArray(initialPayload.images) ? initialPayload.images[0] : (initialPayload.images || '');
           } else if (lowerReq.includes('name') && lowerReq.includes('store')) {
-            foundVal = initialPayload.storename || initialPayload.storeName || '';
+            foundVal = initialPayload.storeName || initialPayload.storename || '';
           } else if (lowerReq.includes('title') || lowerReq.includes('name')) {
             foundVal = initialPayload.title || initialPayload.name || '';
           } else if (lowerReq.includes('price') || lowerReq.includes('cost')) {
@@ -359,6 +359,12 @@ export const resilientCreateDocument = async (
 
         if (foundVal !== undefined) {
           payload[reqAttr] = foundVal;
+          // Delete any other key in payload that has the same name but different casing
+          for (const k of Object.keys(payload)) {
+            if (k !== reqAttr && k.toLowerCase().replace(/[^a-z0-9]/g, '') === lowerReq) {
+              delete payload[k];
+            }
+          }
           continue;
         }
       }
@@ -690,27 +696,26 @@ export const createProductInAppwrite = async (product: Product): Promise<{ succe
     ? product.images
     : ['https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?auto=format&fit=crop&w=600&q=80'];
 
-  // User confirmed their Appwrite attribute is exactly 'storewhatsapp' (lowercase)
-  // We use clean singular keys to prevent duplicate attribute schema errors
+  // User confirmed their Appwrite attributes: 'storeId' (camelCase) and 'storewhatsapp' (lowercase)
   const initialPayload: Record<string, any> = {
     title: product.title,
     description: product.description || '',
     price: Number(product.price) || 0,
+    storeId: product.storeId,
     storewhatsapp: product.storeWhatsApp || '',
     category: product.category || 'other_service',
     images: images,
     condition: product.condition || 'good',
     currency: product.currency || '$',
-    storeid: product.storeId,
-    storename: product.storeName || '',
-    storelocation: product.storeLocation || '',
-    storeisverified: Boolean(product.storeIsVerified),
-    instock: product.inStock !== undefined ? Boolean(product.inStock) : true,
+    storeName: product.storeName || '',
+    storeLocation: product.storeLocation || '',
+    storeIsVerified: Boolean(product.storeIsVerified),
+    inStock: product.inStock !== undefined ? Boolean(product.inStock) : true,
     views: Number(product.views) || 0,
-    whatsappinquiries: Number(product.whatsappInquiries) || 0,
-    isservice: Boolean(product.isService),
-    istradeable: Boolean(product.isTradeable),
-    tradepreference: product.tradePreference || '',
+    whatsappInquiries: Number(product.whatsappInquiries) || 0,
+    isService: Boolean(product.isService),
+    isTradeable: Boolean(product.isTradeable),
+    tradePreference: product.tradePreference || '',
   };
 
   const result = await resilientCreateDocument(config.databaseId, collId, product.id, initialPayload);
