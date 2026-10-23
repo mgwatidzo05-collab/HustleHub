@@ -202,11 +202,11 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
           'reviewCount (integer)',
         ],
         products: [
-          'storeId (string, 100)',
-          'storeName (string, 100)',
-          'storeWhatsApp (string, 50)',
-          'storeLocation (string, 255)',
-          'storeIsVerified (boolean)',
+          'storeId or storeid (string, 100)',
+          'storeName or storename (string, 100)',
+          'storewhatsapp or storeWhatsApp (string, 50)',
+          'storeLocation or storelocation (string, 255)',
+          'storeIsVerified or storeisverified (boolean)',
           'title (string, 255)',
           'description (string, 2000)',
           'price (float)',
@@ -1442,12 +1442,12 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                         <div className="p-2.5 rounded bg-black/40 border border-slate-800 font-mono text-[11px] text-slate-300 space-y-0.5 overflow-x-auto">
                           <div><strong>Attributes to add:</strong></div>
                           <div className="text-slate-400">id (String, size 100, Optional)</div>
-                          <div className="text-slate-400">createdAt (String, size 100, Optional)</div>
-                          <div className="text-slate-400">storeId (String, size 100, Required)</div>
-                          <div className="text-slate-400">storeName (String, size 100, Required)</div>
-                          <div className="text-slate-400">storeWhatsApp or storewhatsapp (String, size 50, Required)</div>
-                          <div className="text-slate-400">storeLocation (String, size 255)</div>
-                          <div className="text-slate-400">storeIsVerified (Boolean, Default: true)</div>
+                          <div className="text-slate-400">createdAt or createdat (String, size 100, Optional)</div>
+                          <div className="text-slate-400">storeId or storeid (String, size 100, Required)</div>
+                          <div className="text-slate-400">storeName or storename (String, size 100, Required)</div>
+                          <div className="text-amber-400 font-semibold">storewhatsapp or storeWhatsApp (String, size 50, Required) - both work!</div>
+                          <div className="text-slate-400">storeLocation or storelocation (String, size 255)</div>
+                          <div className="text-slate-400">storeIsVerified or storeisverified (Boolean, Default: true)</div>
                           <div className="text-slate-400">title (String, size 255, Required)</div>
                           <div className="text-slate-400">description (String, size 2000, Required)</div>
                           <div className="text-slate-400">price (Float, Required)</div>

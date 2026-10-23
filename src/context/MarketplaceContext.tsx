@@ -382,16 +382,8 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       },
     });
 
-    // Polling fallback every 15s to keep all devices in sync even if WebSocket reconnects
-    const pollInterval = setInterval(() => {
-      if (isSubscribed && typeof document !== 'undefined' && document.visibilityState !== 'hidden') {
-        syncWithAppwrite();
-      }
-    }, 15000);
-
     return () => {
       isSubscribed = false;
-      clearInterval(pollInterval);
       unsubscribe();
     };
   }, [appwriteConfig, syncWithAppwrite]);
@@ -466,69 +458,80 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const loginBusinessWithPassword = async (email: string, password: string): Promise<{ success: boolean; error?: string; store?: Store }> => {
     const trimmedEmail = email.trim().toLowerCase();
-    const normalizeEmail = (e: string) => e.trim().toLowerCase().replace(/\.con$/i, '.com');
+    const cleanPassword = password.trim();
 
-    // 1. Try finding in current stores state with flexible matching (.com vs .con typo resilience)
-    let store = stores.find(s => {
-      const storedEmail = (s.ownerEmail || '').toLowerCase();
-      return (
-        storedEmail === trimmedEmail ||
-        normalizeEmail(storedEmail) === normalizeEmail(trimmedEmail) ||
-        (storedEmail.includes('@') && trimmedEmail.includes('@') && storedEmail.split('@')[0] === trimmedEmail.split('@')[0])
-      );
-    });
+    const findMatchingStore = (storeList: Store[]) => {
+      return storeList.find(s => {
+        const ownerEmail = (s.ownerEmail || '').trim().toLowerCase();
+        const storeName = (s.name || '').trim().toLowerCase();
+        const cleanPhone = (s.whatsappNumber || '').replace(/\D/g, '');
+        const cleanInput = trimmedEmail.replace(/\D/g, '');
 
-    // 2. If not found in memory, fetch fresh stores directly from Appwrite Cloud
+        if (ownerEmail && ownerEmail === trimmedEmail) return true;
+        if (storeName && storeName === trimmedEmail) return true;
+        if (cleanPhone && cleanInput.length >= 7 && cleanPhone.endsWith(cleanInput)) return true;
+        return false;
+      });
+    };
+
+    let store = findMatchingStore(stores);
+
+    // If not found in local cache (e.g. freshly opened on another device before sync completed),
+    // query Appwrite directly in real-time
     if (!store) {
       try {
-        const freshStores = await fetchStoresFromAppwrite();
-        if (freshStores && freshStores.length > 0) {
-          setStores(freshStores);
-          store = freshStores.find(s => {
-            const storedEmail = (s.ownerEmail || '').toLowerCase();
-            return (
-              storedEmail === trimmedEmail ||
-              normalizeEmail(storedEmail) === normalizeEmail(trimmedEmail) ||
-              (storedEmail.includes('@') && trimmedEmail.includes('@') && storedEmail.split('@')[0] === trimmedEmail.split('@')[0])
-            );
+        const liveStores = await fetchStoresFromAppwrite();
+        if (liveStores && liveStores.length > 0) {
+          setStores(prev => {
+            const map = new Map<string, Store>();
+            prev.forEach(s => map.set(s.id, s));
+            liveStores.forEach(s => map.set(s.id, s));
+            return Array.from(map.values());
           });
+          store = findMatchingStore(liveStores);
         }
-      } catch (err) {
-        console.warn('Failed to query Appwrite during store login:', err);
+      } catch (lookupErr) {
+        console.warn('Realtime Appwrite store lookup on sign-in error:', lookupErr);
       }
     }
 
     if (!store) {
       return {
         success: false,
-        error: `No registered business found for "${email}". Please double-check the email address or register your store below.`,
+        error: `No registered business found for "${email}". If you registered on another phone or computer, please double-check your email or register your store below.`,
       };
     }
 
-    // If store already has a password set, verify it
-    if (store.password && store.password !== password) {
+    // Password verification with trimmed values
+    const savedPassword = (store.password || '').trim();
+    if (savedPassword && savedPassword !== cleanPassword) {
       return {
         success: false,
-        error: 'Incorrect password for this business account. Please try again.',
+        error: 'Incorrect password for this business account. Please double-check your password.',
       };
     }
 
-    // If store didn't have a password saved yet (e.g. registered before password field was added), save entered password for future logins!
-    if (!store.password && password) {
-      updateStoreProfile(store.id, { password });
+    // If store didn't have a password saved yet in Appwrite (e.g. registered before password field was added),
+    // save this password so future logins on all devices succeed!
+    if (!savedPassword && cleanPassword) {
+      updateStoreProfile(store.id, { password: cleanPassword });
+      updateStoreInAppwrite(store.id, { password: cleanPassword });
     }
 
     // Set currentUser with business role and storeId
     const newUser: User = {
       id: store.ownerId || 'biz-' + Date.now(),
-      name: store.ownerName,
-      email: store.ownerEmail,
+      name: store.ownerName || store.name,
+      email: store.ownerEmail || email,
       role: 'business',
       university: store.university || selectedUniversity,
       createdAt: store.createdAt || new Date().toISOString(),
       storeId: store.id,
     };
     setCurrentUser(newUser);
+
+    // Refresh cloud products for this store in background
+    syncWithAppwrite().catch(() => {});
 
     return { success: true, store };
   };
@@ -574,14 +577,7 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     setStores(prev => [newStore, ...prev]);
 
     // Push to Appwrite Database
-    try {
-      const storeRes = await createStoreInAppwrite(newStore);
-      if (storeRes.success && storeRes.docId) {
-        newStore.id = storeRes.docId;
-      }
-    } catch (e) {
-      console.warn('Failed to push store to Appwrite:', e);
-    }
+    createStoreInAppwrite(newStore);
 
     // Update user session with business role and storeId
     const newUser: User = {

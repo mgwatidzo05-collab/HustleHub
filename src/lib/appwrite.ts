@@ -6,14 +6,14 @@ const STORAGE_KEY_APPWRITE = 'hustlehub_appwrite_config';
 // Default Appwrite configuration (can be driven by Vite env variables or localStorage)
 export const defaultAppwriteConfig: AppwriteConfig = {
   endpoint: import.meta.env.VITE_APPWRITE_ENDPOINT || 'https://cloud.appwrite.io/v1',
-  projectId: import.meta.env.VITE_APPWRITE_PROJECT_ID || '6ad9477c0031111e1c1c',
+  projectId: import.meta.env.VITE_APPWRITE_PROJECT_ID || '',
   databaseId: import.meta.env.VITE_APPWRITE_DATABASE_ID || 'hustlehub_db',
   bucketId: import.meta.env.VITE_APPWRITE_BUCKET_ID || 'hustlehub_assets',
   storesCollectionId: import.meta.env.VITE_APPWRITE_STORES_COLLECTION_ID || 'stores',
   productsCollectionId: import.meta.env.VITE_APPWRITE_PRODUCTS_COLLECTION_ID || 'products',
   reportsCollectionId: import.meta.env.VITE_APPWRITE_REPORTS_COLLECTION_ID || 'reports',
   eventsCollectionId: import.meta.env.VITE_APPWRITE_EVENTS_COLLECTION_ID || 'analytics_events',
-  isConfigured: true,
+  isConfigured: Boolean(import.meta.env.VITE_APPWRITE_PROJECT_ID),
 };
 
 export const getStoredAppwriteConfig = (): AppwriteConfig => {
@@ -21,19 +21,7 @@ export const getStoredAppwriteConfig = (): AppwriteConfig => {
     const raw = localStorage.getItem(STORAGE_KEY_APPWRITE);
     if (raw) {
       const parsed = JSON.parse(raw);
-      const config = { ...defaultAppwriteConfig, ...parsed };
-      // Never allow blank values in localStorage to wipe out working Appwrite defaults
-      if (!config.projectId || typeof config.projectId !== 'string' || !config.projectId.trim()) {
-        config.projectId = defaultAppwriteConfig.projectId;
-      }
-      if (!config.databaseId || typeof config.databaseId !== 'string' || !config.databaseId.trim()) {
-        config.databaseId = defaultAppwriteConfig.databaseId;
-      }
-      if (!config.endpoint || typeof config.endpoint !== 'string' || !config.endpoint.trim()) {
-        config.endpoint = defaultAppwriteConfig.endpoint;
-      }
-      config.isConfigured = Boolean(config.projectId);
-      return config;
+      return { ...defaultAppwriteConfig, ...parsed };
     }
   } catch (err) {
     console.error('Failed to read appwrite config from localStorage', err);
@@ -240,7 +228,7 @@ export const resilientCreateDocument = async (
   }
 
   // Adaptive creation loop (handles attribute rejections, type differences, permission differences)
-  for (let attempt = 0; attempt < 20; attempt++) {
+  for (let attempt = 0; attempt < 30; attempt++) {
     try {
       const perms = usePermissions ? standardPermissions : undefined;
       const res = await databases.createDocument(
@@ -288,97 +276,132 @@ export const resilientCreateDocument = async (
         continue;
       }
 
-      // Check 3: Unknown or prohibited attribute
-      // Catches: 'Invalid document structure: Unknown attribute: "storeWhatsApp"',
-      //          'Attribute "xyz" is not allowed', 'Prohibited attribute: "xyz"', etc.
-      const unknownMatch =
-        msg.match(/unknown attribute:\s*["']?([a-zA-Z0-9_]+)["']?/i) ||
+      // Check 3: Prohibited attribute ("Attribute 'xyz' is not allowed")
+      const prohibitedMatch =
         msg.match(/attribute\s+["']?([a-zA-Z0-9_]+)["']?\s+is not allowed/i) ||
         msg.match(/prohibited attribute:\s*["']?([a-zA-Z0-9_]+)["']?/i) ||
-        msg.match(/attribute_not_found.*?([a-zA-Z0-9_]+)/i);
+        msg.match(/unknown attribute:\s*["']?([a-zA-Z0-9_]+)["']?/i) ||
+        msg.match(/attribute_not_found.*?([a-zA-Z0-9_]+)/i) ||
+        msg.match(/invalid document structure.*?attribute\s+["']?([a-zA-Z0-9_]+)["']?/i);
 
-      if (unknownMatch && unknownMatch[1]) {
-        const attrName = unknownMatch[1];
+      if (prohibitedMatch && prohibitedMatch[1]) {
+        const attrName = prohibitedMatch[1];
         prohibitedAttrs.add(attrName);
         delete payload[attrName];
 
-        // If images attribute was rejected, try fallback attribute names like imageUrl or image
-        if (attrName === 'images' && !prohibitedAttrs.has('imageUrl') && initialPayload.images) {
-          const firstImg = Array.isArray(initialPayload.images) ? initialPayload.images[0] : String(initialPayload.images);
-          payload.imageUrl = firstImg;
-        } else if (attrName === 'imageUrl' && !prohibitedAttrs.has('image') && initialPayload.images) {
-          const firstImg = Array.isArray(initialPayload.images) ? initialPayload.images[0] : String(initialPayload.images);
-          payload.image = firstImg;
+        const lowerAttr = attrName.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+        // If lowercase attribute was rejected, try camelCase alternate (e.g. storewhatsapp -> storeWhatsApp)
+        // If camelCase was rejected, try lowercase alternate (e.g. storeWhatsApp -> storewhatsapp)
+        const alternateKey = attrName === lowerAttr
+          ? Object.keys(initialPayload).find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === lowerAttr && k !== attrName)
+          : lowerAttr;
+
+        if (alternateKey && !prohibitedAttrs.has(alternateKey)) {
+          for (const [k, v] of Object.entries(initialPayload)) {
+            if (k.toLowerCase().replace(/[^a-z0-9]/g, '') === lowerAttr && v !== undefined) {
+              payload[alternateKey] = v;
+              break;
+            }
+          }
         }
 
-        // If camelCase was rejected, check if lowercase exists in initialPayload
-        const lowerName = attrName.toLowerCase();
-        if (lowerName !== attrName && initialPayload[lowerName] !== undefined && !prohibitedAttrs.has(lowerName)) {
-          payload[lowerName] = initialPayload[lowerName];
+        // If images attribute was rejected, try fallback attribute names like imageUrl, imageurl, or image
+        if ((lowerAttr === 'images' || lowerAttr === 'imageurl') && initialPayload.images) {
+          const firstImg = Array.isArray(initialPayload.images) ? initialPayload.images[0] : String(initialPayload.images);
+          if (!prohibitedAttrs.has('imageUrl')) payload.imageUrl = firstImg;
+          else if (!prohibitedAttrs.has('imageurl')) payload.imageurl = firstImg;
+          else if (!prohibitedAttrs.has('image')) payload.image = firstImg;
         }
 
         continue;
       }
 
-      // Check 4: Missing required attribute
-      // Catches: 'Invalid document structure: Missing required attribute "storewhatsapp"'
+      // Check 3B: Missing required attribute ("Attribute 'xyz' is required")
       const requiredMatch =
-        msg.match(/missing required attribute\s+["']?([a-zA-Z0-9_]+)["']?/i) ||
-        msg.match(/attribute\s+["']?([a-zA-Z0-9_]+)["']?\s+is required/i);
+        msg.match(/attribute\s+["']?([a-zA-Z0-9_]+)["']?\s+is required/i) ||
+        msg.match(/missing required attribute:\s*["']?([a-zA-Z0-9_]+)["']?/i) ||
+        msg.match(/attribute_required.*?([a-zA-Z0-9_]+)/i);
 
       if (requiredMatch && requiredMatch[1]) {
         const reqAttr = requiredMatch[1];
-        // Search in initialPayload case-insensitively or via snake_case
-        const existingKey = Object.keys(initialPayload).find(
-          k => k.toLowerCase() === reqAttr.toLowerCase() ||
-               k.toLowerCase().replace(/_/g, '') === reqAttr.toLowerCase().replace(/_/g, '')
-        );
+        const lowerReq = reqAttr.toLowerCase().replace(/[^a-z0-9]/g, '');
 
-        if (existingKey && initialPayload[existingKey] !== undefined) {
-          payload[reqAttr] = initialPayload[existingKey];
-        } else if (reqAttr.toLowerCase().includes('whatsapp')) {
-          payload[reqAttr] = initialPayload.storeWhatsApp || initialPayload.whatsappNumber || '+263000000000';
-        } else if (reqAttr.toLowerCase().includes('store')) {
-          payload[reqAttr] = initialPayload.storeId || initialPayload.storeName || '';
-        } else if (reqAttr.toLowerCase().includes('image')) {
-          const firstImg = Array.isArray(initialPayload.images) ? initialPayload.images[0] : String(initialPayload.images || '');
-          payload[reqAttr] = firstImg;
-        } else {
-          payload[reqAttr] = '';
+        // Search in initialPayload case-insensitively
+        let foundVal: any = undefined;
+        for (const [k, v] of Object.entries(initialPayload)) {
+          if (k.toLowerCase().replace(/[^a-z0-9]/g, '') === lowerReq && v !== undefined) {
+            foundVal = v;
+            break;
+          }
         }
-        continue;
+
+        // Semantic field fallbacks
+        if (foundVal === undefined) {
+          if (lowerReq.includes('whatsapp') || lowerReq.includes('phone')) {
+            foundVal = initialPayload.storewhatsapp || initialPayload.storeWhatsApp || initialPayload.whatsappNumber || initialPayload.whatsapp || '';
+          } else if (lowerReq.includes('store') && lowerReq.includes('id')) {
+            foundVal = initialPayload.storeid || initialPayload.storeId || '';
+          } else if (lowerReq.includes('image') || lowerReq.includes('photo')) {
+            foundVal = Array.isArray(initialPayload.images) ? initialPayload.images[0] : (initialPayload.images || '');
+          } else if (lowerReq.includes('name') && lowerReq.includes('store')) {
+            foundVal = initialPayload.storename || initialPayload.storeName || '';
+          } else if (lowerReq.includes('title') || lowerReq.includes('name')) {
+            foundVal = initialPayload.title || initialPayload.name || '';
+          } else if (lowerReq.includes('price') || lowerReq.includes('cost')) {
+            foundVal = initialPayload.price !== undefined ? initialPayload.price : 0;
+          } else if (lowerReq.includes('desc')) {
+            foundVal = initialPayload.description || '';
+          } else if (lowerReq.includes('category')) {
+            foundVal = initialPayload.category || 'other_service';
+          }
+        }
+
+        if (foundVal !== undefined) {
+          payload[reqAttr] = foundVal;
+          continue;
+        }
       }
 
-      // Check 5: Images type mismatch (array vs string, or invalid type)
+      // Check 4: Images type mismatch (array vs string)
       if (
-        msg.toLowerCase().includes('images') ||
-        msg.toLowerCase().includes('imageurl') ||
-        msg.toLowerCase().includes('image')
+        msg.toLowerCase().includes('images') || msg.toLowerCase().includes('imageurl') || msg.toLowerCase().includes('image')
       ) {
-        if (Array.isArray(payload.images)) {
-          // Schema expects single string, not array
-          payload.images = payload.images[0] || '';
+        if (
+          msg.toLowerCase().includes('expected string') ||
+          msg.toLowerCase().includes('got array') ||
+          msg.toLowerCase().includes('valid string') ||
+          msg.toLowerCase().includes('type string')
+        ) {
+          // Schema expects a single string for images, not an array
+          if (Array.isArray(payload.images)) {
+            payload.images = payload.images[0] || '';
+          }
           continue;
-        } else if (typeof payload.images === 'string' && msg.toLowerCase().includes('array')) {
+        } else if (
+          msg.toLowerCase().includes('expected array') ||
+          msg.toLowerCase().includes('got string') ||
+          msg.toLowerCase().includes('valid array')
+        ) {
           // Schema expects array
-          payload.images = [payload.images].filter(Boolean);
+          if (typeof payload.images === 'string') {
+            payload.images = [payload.images].filter(Boolean);
+          }
           continue;
         }
       }
 
-      // Check 6: Price type mismatch (float vs integer vs string)
+      // Check 5: Price type mismatch (float vs integer vs string)
       if (msg.toLowerCase().includes('price') && msg.toLowerCase().includes('type')) {
         if (msg.toLowerCase().includes('integer')) {
           payload.price = Math.round(Number(payload.price) || 0);
         } else if (msg.toLowerCase().includes('string')) {
           payload.price = String(payload.price);
-        } else {
-          payload.price = Number(payload.price) || 0;
         }
         continue;
       }
 
-      // Check 7: String size limit exceeded
+      // Check 6: String size limit exceeded
       const sizeMatch = msg.match(/attribute\s+["']?([a-zA-Z0-9_]+)["']?.*?shorter than\s+(\d+)/i);
       if (sizeMatch && sizeMatch[1] && sizeMatch[2]) {
         const attrName = sizeMatch[1];
@@ -389,43 +412,9 @@ export const resilientCreateDocument = async (
         }
       }
 
-      // Check 8: Strip non-essential optional fields on later attempts
-      if (attempt === 4) {
-        delete payload.id;
-        delete payload.createdAt;
-        delete payload.updatedAt;
-        delete payload.views;
-        delete payload.whatsappInquiries;
-        delete payload.inStock;
-        delete payload.isService;
-        delete payload.isTradeable;
-        delete payload.tradePreference;
-        continue;
-      }
-
-      if (attempt === 8) {
-        delete payload.storeLocation;
-        delete payload.storeIsVerified;
-        delete payload.condition;
-        delete payload.currency;
-        continue;
-      }
-
       // If cannot parse specific error, break to return error
       break;
     }
-  }
-
-  // Provide clear instructions if permission failed
-  if (
-    lastError.toLowerCase().includes('missing scope (documents.write)') ||
-    lastError.toLowerCase().includes('unauthorized') ||
-    lastError.toLowerCase().includes('permission denied')
-  ) {
-    return {
-      success: false,
-      error: `Appwrite Permission Error: The "${collectionId}" collection does not allow guests to write. In Appwrite Console > Database > "${collectionId}" > Settings > Permissions, add Role: Any with Create, Read, Update permissions.`,
-    };
   }
 
   return { success: false, error: lastError || 'Failed to create document in Appwrite' };
@@ -453,37 +442,37 @@ export const fetchStoresFromAppwrite = async (): Promise<Store[] | null> => {
 
     return res.documents.map((doc: any) => ({
       id: doc.id || doc.$id,
-      ownerId: doc.ownerId || '',
-      ownerName: doc.ownerName || '',
-      ownerEmail: doc.ownerEmail || '',
-      password: doc.password || '',
+      ownerId: doc.ownerId || doc.ownerid || doc.userId || doc.userid || '',
+      ownerName: doc.ownerName || doc.ownername || doc.name || '',
+      ownerEmail: doc.ownerEmail || doc.owneremail || doc.email || doc.owner_email || '',
+      password: doc.password || doc.pass || '',
       name: doc.name || '',
       tagline: doc.tagline || '',
-      description: doc.description || '',
+      description: doc.description || doc.desc || '',
       category: doc.category || 'other_service',
       university: doc.university || 'NUST',
-      location: doc.location || '',
+      location: doc.location || doc.storelocation || '',
       delivers: Boolean(doc.delivers),
-      deliveryNotes: doc.deliveryNotes || '',
-      whatsappNumber: doc.whatsappNumber || '',
-      whatsappClicks: Number(doc.whatsappClicks) || 0,
-      profileViews: Number(doc.profileViews) || 0,
-      isVerified: doc.isVerified !== undefined ? Boolean(doc.isVerified) : true,
-      verificationStatus: doc.verificationStatus || 'verified',
-      isFrozen: Boolean(doc.isFrozen),
-      freezeReason: doc.freezeReason || '',
-      isFeatured: Boolean(doc.isFeatured),
-      featuredUntil: doc.featuredUntil || '',
-      featuredRequested: Boolean(doc.featuredRequested),
-      featuredRequestDate: doc.featuredRequestDate || '',
-      hasPremiumLimit: Boolean(doc.hasPremiumLimit),
-      premiumRequested: Boolean(doc.premiumRequested),
-      premiumRequestDate: doc.premiumRequestDate || '',
-      logoUrl: doc.logoUrl || '',
-      bannerUrl: doc.bannerUrl || '',
-      createdAt: doc.createdAt || doc.$createdAt || new Date().toISOString(),
+      deliveryNotes: doc.deliveryNotes || doc.deliverynotes || '',
+      whatsappNumber: doc.whatsappNumber || doc.whatsappnumber || doc.whatsapp || doc.phone || '',
+      whatsappClicks: Number(doc.whatsappClicks ?? doc.whatsappclicks ?? 0),
+      profileViews: Number(doc.profileViews ?? doc.profileviews ?? 0),
+      isVerified: doc.isVerified !== undefined ? Boolean(doc.isVerified) : (doc.isverified !== undefined ? Boolean(doc.isverified) : true),
+      verificationStatus: doc.verificationStatus || doc.verificationstatus || 'verified',
+      isFrozen: Boolean(doc.isFrozen ?? doc.isfrozen),
+      freezeReason: doc.freezeReason || doc.freezereason || '',
+      isFeatured: Boolean(doc.isFeatured ?? doc.isfeatured),
+      featuredUntil: doc.featuredUntil || doc.featureduntil || '',
+      featuredRequested: Boolean(doc.featuredRequested ?? doc.featuredrequested),
+      featuredRequestDate: doc.featuredRequestDate || doc.featuredrequestdate || '',
+      hasPremiumLimit: Boolean(doc.hasPremiumLimit ?? doc.haspremiumlimit),
+      premiumRequested: Boolean(doc.premiumRequested ?? doc.premiumrequested),
+      premiumRequestDate: doc.premiumRequestDate || doc.premiumrequestdate || '',
+      logoUrl: doc.logoUrl || doc.logourl || doc.logo || '',
+      bannerUrl: doc.bannerUrl || doc.bannerurl || doc.banner || '',
+      createdAt: doc.createdAt || doc.createdat || doc.$createdAt || new Date().toISOString(),
       rating: doc.rating !== undefined ? Number(doc.rating) : 5.0,
-      reviewCount: Number(doc.reviewCount) || 0,
+      reviewCount: Number(doc.reviewCount ?? doc.reviewcount ?? 0),
     })) as Store[];
   } catch (err: any) {
     console.warn('Appwrite fetchStoresFromAppwrite error:', err?.message || err);
@@ -537,25 +526,25 @@ export const fetchProductsFromAppwrite = async (): Promise<Product[] | null> => 
         id: doc.id || doc.$id,
         appwriteDocId: doc.$id,
         isSyncedToCloud: true,
-        storeId: doc.storeId || doc.store_id || '',
-        storeName: doc.storeName || doc.store_name || '',
-        storeWhatsApp: doc.storeWhatsApp || doc.storewhatsapp || doc.store_whatsapp || doc.whatsapp || '',
-        storeLocation: doc.storeLocation || doc.store_location || doc.location || '',
-        storeIsVerified: doc.storeIsVerified !== undefined ? Boolean(doc.storeIsVerified) : (doc.store_is_verified !== undefined ? Boolean(doc.store_is_verified) : true),
-        title: doc.title || '',
-        description: doc.description || '',
+        storeId: doc.storeId || doc.storeid || doc.store_id || '',
+        storeName: doc.storeName || doc.storename || '',
+        storeWhatsApp: doc.storeWhatsApp || doc.storewhatsapp || doc.whatsapp || doc.store_whatsapp || '',
+        storeLocation: doc.storeLocation || doc.storelocation || '',
+        storeIsVerified: doc.storeIsVerified !== undefined ? Boolean(doc.storeIsVerified) : (doc.storeisverified !== undefined ? Boolean(doc.storeisverified) : true),
+        title: doc.title || doc.name || '',
+        description: doc.description || doc.desc || '',
         price: Number(doc.price) || 0,
         currency: doc.currency || '$',
         category: doc.category || 'other_service',
-        isService: Boolean(doc.isService !== undefined ? doc.isService : doc.is_service),
+        isService: Boolean(doc.isService ?? doc.isservice),
         condition: doc.condition || 'good',
-        isTradeable: Boolean(doc.isTradeable !== undefined ? doc.isTradeable : doc.is_tradeable),
-        tradePreference: doc.tradePreference || doc.trade_preference || '',
+        isTradeable: Boolean(doc.isTradeable ?? doc.istradeable),
+        tradePreference: doc.tradePreference || doc.tradepreference || '',
         images: parsedImages.length > 0 ? parsedImages : ['https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?auto=format&fit=crop&w=600&q=80'],
-        inStock: doc.inStock !== undefined ? Boolean(doc.inStock) : (doc.in_stock !== undefined ? Boolean(doc.in_stock) : true),
+        inStock: doc.inStock !== undefined ? Boolean(doc.inStock) : (doc.instock !== undefined ? Boolean(doc.instock) : true),
         views: Number(doc.views) || 0,
-        whatsappInquiries: Number(doc.whatsappInquiries || doc.whatsapp_inquiries) || 0,
-        createdAt: doc.createdAt || doc.created_at || doc.$createdAt || new Date().toISOString(),
+        whatsappInquiries: Number(doc.whatsappInquiries ?? doc.whatsappinquiries ?? 0),
+        createdAt: doc.createdAt || doc.createdat || doc.$createdAt || new Date().toISOString(),
       } as Product;
     });
   } catch (err: any) {
@@ -573,10 +562,16 @@ export const createStoreInAppwrite = async (store: Store): Promise<{ success: bo
 
   const collId = config.storesCollectionId || 'stores';
   const initialPayload: Record<string, any> = {
-    ownerId: store.ownerId,
-    ownerName: store.ownerName,
+    // Both casings: ownerEmail and owneremail, password and pass
     ownerEmail: store.ownerEmail,
+    owneremail: store.ownerEmail,
+    email: store.ownerEmail,
     password: store.password || '',
+    pass: store.password || '',
+    ownerName: store.ownerName,
+    ownername: store.ownerName,
+    ownerId: store.ownerId,
+    ownerid: store.ownerId,
     name: store.name,
     tagline: store.tagline || '',
     description: store.description || '',
@@ -585,22 +580,39 @@ export const createStoreInAppwrite = async (store: Store): Promise<{ success: bo
     location: store.location || '',
     delivers: Boolean(store.delivers),
     deliveryNotes: store.deliveryNotes || '',
+    deliverynotes: store.deliveryNotes || '',
     whatsappNumber: store.whatsappNumber || '',
+    whatsappnumber: store.whatsappNumber || '',
+    whatsapp: store.whatsappNumber || '',
     whatsappClicks: Number(store.whatsappClicks) || 0,
+    whatsappclicks: Number(store.whatsappClicks) || 0,
     profileViews: Number(store.profileViews) || 0,
+    profileviews: Number(store.profileViews) || 0,
     isVerified: store.isVerified !== undefined ? Boolean(store.isVerified) : true,
+    isverified: store.isVerified !== undefined ? Boolean(store.isVerified) : true,
     verificationStatus: store.verificationStatus || 'verified',
+    verificationstatus: store.verificationStatus || 'verified',
     isFrozen: Boolean(store.isFrozen),
+    isfrozen: Boolean(store.isFrozen),
     freezeReason: store.freezeReason || '',
+    freezereason: store.freezeReason || '',
     isFeatured: Boolean(store.isFeatured),
+    isfeatured: Boolean(store.isFeatured),
     featuredUntil: store.featuredUntil || '',
+    featureduntil: store.featuredUntil || '',
     featuredRequested: Boolean(store.featuredRequested),
+    featuredrequested: Boolean(store.featuredRequested),
     hasPremiumLimit: Boolean(store.hasPremiumLimit),
+    haspremiumlimit: Boolean(store.hasPremiumLimit),
     premiumRequested: Boolean(store.premiumRequested),
+    premiumrequested: Boolean(store.premiumRequested),
     logoUrl: store.logoUrl || '',
+    logourl: store.logoUrl || '',
     bannerUrl: store.bannerUrl || '',
+    bannerurl: store.bannerUrl || '',
     rating: Number(store.rating) || 5.0,
     reviewCount: Number(store.reviewCount) || 0,
+    reviewcount: Number(store.reviewCount) || 0,
   };
 
   const result = await resilientCreateDocument(config.databaseId, collId, store.id, initialPayload);
@@ -618,11 +630,29 @@ export const updateStoreInAppwrite = async (storeId: string, updates: Partial<St
 
   try {
     const collId = config.storesCollectionId || 'stores';
+    const clean = cleanPayload(updates);
+
+    // Provide lowercase aliases for common updates
+    if (updates.password !== undefined) {
+      clean.password = updates.password;
+      clean.pass = updates.password;
+    }
+    if (updates.ownerEmail !== undefined) {
+      clean.ownerEmail = updates.ownerEmail;
+      clean.owneremail = updates.ownerEmail;
+      clean.email = updates.ownerEmail;
+    }
+    if (updates.whatsappNumber !== undefined) {
+      clean.whatsappNumber = updates.whatsappNumber;
+      clean.whatsappnumber = updates.whatsappNumber;
+      clean.whatsapp = updates.whatsappNumber;
+    }
+
     await databases.updateDocument(
       config.databaseId,
       collId,
       storeId.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 36),
-      cleanPayload(updates)
+      clean
     );
   } catch (err) {
     console.warn('Failed to sync store update to Appwrite:', err);
@@ -660,46 +690,27 @@ export const createProductInAppwrite = async (product: Product): Promise<{ succe
     ? product.images
     : ['https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?auto=format&fit=crop&w=600&q=80'];
 
-  // Ensure whatsapp number is available from product or store cache
-  let whatsapp = product.storeWhatsApp || '';
-  if (!whatsapp && typeof localStorage !== 'undefined') {
-    try {
-      const rawStores = localStorage.getItem('hustlehub_stores_live');
-      if (rawStores) {
-        const parsed = JSON.parse(rawStores);
-        const matchStore = parsed.find((s: any) => s.id === product.storeId || s.name === product.storeName);
-        if (matchStore && matchStore.whatsappNumber) {
-          whatsapp = matchStore.whatsappNumber;
-        }
-      }
-    } catch {}
-  }
-  if (!whatsapp) {
-    whatsapp = '+263712016200';
-  }
-
+  // User confirmed their Appwrite attribute is exactly 'storewhatsapp' (lowercase)
+  // We use clean singular keys to prevent duplicate attribute schema errors
   const initialPayload: Record<string, any> = {
-    id: product.id,
-    storeId: product.storeId,
-    storeName: product.storeName || '',
-    storewhatsapp: whatsapp, // Appwrite products table column
-    storeWhatsApp: whatsapp, // Fallback camelCase
-    store_whatsapp: whatsapp, // Fallback snake_case
-    storeLocation: product.storeLocation || 'Campus',
-    storeIsVerified: product.storeIsVerified !== undefined ? Boolean(product.storeIsVerified) : true,
     title: product.title,
     description: product.description || '',
     price: Number(product.price) || 0,
-    currency: product.currency || '$',
-    category: product.category || 'clothing',
-    isService: Boolean(product.isService),
-    condition: product.condition || 'good',
-    isTradeable: Boolean(product.isTradeable),
-    tradePreference: product.tradePreference || '',
+    storewhatsapp: product.storeWhatsApp || '',
+    category: product.category || 'other_service',
     images: images,
-    inStock: product.inStock !== undefined ? Boolean(product.inStock) : true,
+    condition: product.condition || 'good',
+    currency: product.currency || '$',
+    storeid: product.storeId,
+    storename: product.storeName || '',
+    storelocation: product.storeLocation || '',
+    storeisverified: Boolean(product.storeIsVerified),
+    instock: product.inStock !== undefined ? Boolean(product.inStock) : true,
     views: Number(product.views) || 0,
-    whatsappInquiries: Number(product.whatsappInquiries) || 0,
+    whatsappinquiries: Number(product.whatsappInquiries) || 0,
+    isservice: Boolean(product.isService),
+    istradeable: Boolean(product.isTradeable),
+    tradepreference: product.tradePreference || '',
   };
 
   const result = await resilientCreateDocument(config.databaseId, collId, product.id, initialPayload);

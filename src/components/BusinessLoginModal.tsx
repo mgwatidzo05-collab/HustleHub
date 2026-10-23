@@ -45,8 +45,8 @@ export const BusinessLoginModal: React.FC<BusinessLoginModalProps> = ({
     setError('');
 
     const trimmedEmail = email.trim();
-    if (!trimmedEmail || !trimmedEmail.includes('@')) {
-      return setError('Please enter a valid store email address.');
+    if (!trimmedEmail) {
+      return setError('Please enter your store email address or store name.');
     }
 
     if (!password) {

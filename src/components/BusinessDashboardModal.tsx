@@ -53,7 +53,6 @@ export const BusinessDashboardModal: React.FC<BusinessDashboardModalProps> = ({
   const [activeTab, setActiveTab] = useState<'products' | 'upgrades' | 'settings'>('products');
   const [showAddProduct, setShowAddProduct] = useState(false);
   const [upgradeSuccessNotice, setUpgradeSuccessNotice] = useState('');
-  const [productWarningNotice, setProductWarningNotice] = useState('');
   const [syncingAll, setSyncingAll] = useState(false);
   const [syncingProductId, setSyncingProductId] = useState<string | null>(null);
 
@@ -132,8 +131,8 @@ export const BusinessDashboardModal: React.FC<BusinessDashboardModalProps> = ({
 
     if (result.success) {
       // Successfully published and pushed to Appwrite Cloud
-      setUpgradeSuccessNotice(`"${prodTitle.trim()}" published live and synced to Appwrite Cloud! It is now visible across all devices.`);
-      setTimeout(() => setUpgradeSuccessNotice(''), 5000);
+      setUpgradeSuccessNotice(`"${prodTitle.trim()}" published live and synced to Appwrite Cloud!`);
+      setTimeout(() => setUpgradeSuccessNotice(''), 4500);
       setShowAddProduct(false);
       setProdTitle('');
       setProdDescription('');
@@ -144,10 +143,10 @@ export const BusinessDashboardModal: React.FC<BusinessDashboardModalProps> = ({
     } else if (result.savedLocally) {
       // Saved on device, inform seller about Appwrite sync status
       setShowAddProduct(false);
-      setProductWarningNotice(
-        `"${prodTitle.trim()}" saved locally on this device, but could not sync to Appwrite Cloud: ${result.error || 'Connection failed'}. Click "Sync All to Appwrite Now" below to push it live to all devices.`
+      setUpgradeSuccessNotice(
+        `"${prodTitle.trim()}" saved on your device! Notice: ${result.error || 'Syncing to Appwrite in progress...'}`
       );
-      setTimeout(() => setProductWarningNotice(''), 10000);
+      setTimeout(() => setUpgradeSuccessNotice(''), 6000);
       setProdTitle('');
       setProdDescription('');
       setProdPrice('');
@@ -244,16 +243,8 @@ export const BusinessDashboardModal: React.FC<BusinessDashboardModalProps> = ({
 
         {/* Success Banner */}
         {upgradeSuccessNotice && (
-          <div className="p-3 bg-emerald-500/20 border-b border-emerald-500/30 text-emerald-300 text-xs text-center font-medium animate-in fade-in">
+          <div className="p-3 bg-emerald-500/20 border-b border-emerald-500/30 text-emerald-300 text-xs text-center font-medium">
             {upgradeSuccessNotice}
-          </div>
-        )}
-
-        {/* Warning Banner */}
-        {productWarningNotice && (
-          <div className="p-3 bg-amber-500/20 border-b border-amber-500/30 text-amber-300 text-xs text-center font-medium flex items-center justify-center gap-2 animate-in fade-in">
-            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
-            <span>{productWarningNotice}</span>
           </div>
         )}
 
