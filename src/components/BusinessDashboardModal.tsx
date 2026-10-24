@@ -46,6 +46,7 @@ export const BusinessDashboardModal: React.FC<BusinessDashboardModalProps> = ({
     syncAllLocalProductsToCloud,
     requestFeaturedPromotion,
     requestPremiumTier,
+    requestStoreVerification,
     updateStoreProfile,
     openTerms,
   } = useMarketplace();
@@ -171,6 +172,12 @@ export const BusinessDashboardModal: React.FC<BusinessDashboardModalProps> = ({
     setTimeout(() => setUpgradeSuccessNotice(''), 4500);
   };
 
+  const handleRequestVerification = () => {
+    requestStoreVerification(currentStore.id);
+    setUpgradeSuccessNotice('Campus Verification Badge requested! HustleHub Admin will review your store credentials.');
+    setTimeout(() => setUpgradeSuccessNotice(''), 4500);
+  };
+
   const handleSaveSettings = (e: React.FormEvent) => {
     e.preventDefault();
     updateStoreProfile(currentStore.id, {
@@ -205,13 +212,22 @@ export const BusinessDashboardModal: React.FC<BusinessDashboardModalProps> = ({
                 {currentStore.isVerified ? (
                   <span className="text-[10px] px-2 py-0.5 rounded bg-blue-500/20 text-blue-400 font-semibold border border-blue-500/30 flex items-center gap-1">
                     <CheckCircle2 className="w-3 h-3" />
-                    Verified
+                    Verified Hustle
                   </span>
-                ) : (
+                ) : currentStore.verificationRequested || currentStore.verificationStatus === 'pending' ? (
                   <span className="text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-semibold border border-amber-500/30 flex items-center gap-1">
                     <AlertTriangle className="w-3 h-3" />
-                    Pending Admin Approval
+                    Verification Under Review
                   </span>
+                ) : (
+                  <button
+                    onClick={handleRequestVerification}
+                    className="text-[10px] px-2 py-0.5 rounded bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 font-semibold border border-blue-500/40 flex items-center gap-1 transition-colors cursor-pointer"
+                    title="Request campus verification badge"
+                  >
+                    <CheckCircle2 className="w-3 h-3 text-blue-400" />
+                    <span>Request Verification Tick</span>
+                  </button>
                 )}
                 {currentStore.isFrozen && (
                   <span className="text-[10px] px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 font-semibold border border-rose-500/30">
@@ -719,7 +735,7 @@ export const BusinessDashboardModal: React.FC<BusinessDashboardModalProps> = ({
                 </p>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 
                 {/* Upgrade 1: Featured Home Page Spotlight */}
                 <div className={`p-4 rounded-xl border flex flex-col justify-between ${
@@ -733,11 +749,11 @@ export const BusinessDashboardModal: React.FC<BusinessDashboardModalProps> = ({
                         <Sparkles className="w-4 h-4" />
                         Home Page Featured
                       </span>
-                      <span className="text-base font-black text-white">$2 / month</span>
+                      <span className="text-base font-black text-white">$2 / mo</span>
                     </div>
 
                     <h4 className="text-sm font-bold text-white mb-1.5">
-                      Front-Row Campus Spotlight
+                      Front-Row Spotlight
                     </h4>
                     <ul className="text-xs text-slate-300 space-y-1.5 mb-4">
                       <li className="flex items-center gap-1.5">
@@ -750,7 +766,7 @@ export const BusinessDashboardModal: React.FC<BusinessDashboardModalProps> = ({
                       </li>
                       <li className="flex items-center gap-1.5">
                         <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                        <span>Estimated 4x more WhatsApp customer inquiries</span>
+                        <span>Estimated 4x more WhatsApp customer chats</span>
                       </li>
                     </ul>
                   </div>
@@ -758,12 +774,12 @@ export const BusinessDashboardModal: React.FC<BusinessDashboardModalProps> = ({
                   <div>
                     {currentStore.isFeatured ? (
                       <div className="text-center py-2 px-3 rounded-lg bg-amber-500/20 text-amber-300 text-xs font-semibold">
-                        ✓ Currently Active on Home Page (Admin Activated)
+                        ✓ Active on Home Page Spotlight
                       </div>
                     ) : currentStore.featuredRequested ? (
                       <div className="text-center py-2 px-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-semibold flex items-center justify-center gap-1.5">
                         <Sparkles className="w-3.5 h-3.5 text-amber-400 animate-spin" />
-                        <span>Request Pending Admin Activation</span>
+                        <span>Pending Admin Activation</span>
                       </div>
                     ) : (
                       <button
@@ -787,22 +803,22 @@ export const BusinessDashboardModal: React.FC<BusinessDashboardModalProps> = ({
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-xs uppercase font-bold tracking-wider text-blue-400 flex items-center gap-1.5">
                         <Layers className="w-4 h-4" />
-                        Premium Store Tier
+                        Premium Tier
                       </span>
-                      <span className="text-base font-black text-white">$1 / month</span>
+                      <span className="text-base font-black text-white">$1 / mo</span>
                     </div>
 
                     <h4 className="text-sm font-bold text-white mb-1.5">
-                      Unlimited Items & Multi-Photos
+                      Unlimited Items & Photos
                     </h4>
                     <ul className="text-xs text-slate-300 space-y-1.5 mb-4">
                       <li className="flex items-center gap-1.5">
                         <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                        <span>List unlimited items (bypasses 3-item free limit)</span>
+                        <span>List unlimited items (bypasses 3-item limit)</span>
                       </li>
                       <li className="flex items-center gap-1.5">
                         <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                        <span>Upload up to 6 high-res photos per product (bypasses 1-photo free limit)</span>
+                        <span>Upload up to 6 high-res photos per listing</span>
                       </li>
                       <li className="flex items-center gap-1.5">
                         <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
@@ -814,12 +830,12 @@ export const BusinessDashboardModal: React.FC<BusinessDashboardModalProps> = ({
                   <div>
                     {currentStore.hasPremiumLimit ? (
                       <div className="text-center py-2 px-3 rounded-lg bg-blue-500/20 text-blue-300 text-xs font-semibold">
-                        ✓ Premium Limits Unlocked (Admin Activated)
+                        ✓ Unlimited Tier Unlocked
                       </div>
                     ) : currentStore.premiumRequested ? (
                       <div className="text-center py-2 px-3 rounded-lg bg-blue-500/10 border border-blue-500/30 text-blue-300 text-xs font-semibold flex items-center justify-center gap-1.5">
                         <Layers className="w-3.5 h-3.5 text-blue-400 animate-pulse" />
-                        <span>Request Pending Admin Activation</span>
+                        <span>Pending Admin Activation</span>
                       </div>
                     ) : (
                       <button
@@ -832,6 +848,64 @@ export const BusinessDashboardModal: React.FC<BusinessDashboardModalProps> = ({
                     )}
                   </div>
                 </div>
+
+                {/* Upgrade 3: Campus Verification Badge */}
+                <div className={`p-4 rounded-xl border flex flex-col justify-between ${
+                  currentStore.isVerified
+                    ? 'bg-blue-500/10 border-blue-500/40'
+                    : 'bg-slate-950/70 border-slate-800'
+                }`}>
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs uppercase font-bold tracking-wider text-blue-400 flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4" />
+                        Verified Badge
+                      </span>
+                      <span className="text-xs font-bold text-emerald-400 uppercase tracking-wider">Free Trust Badge</span>
+                    </div>
+
+                    <h4 className="text-sm font-bold text-white mb-1.5">
+                      Campus Verification Tick
+                    </h4>
+                    <ul className="text-xs text-slate-300 space-y-1.5 mb-4">
+                      <li className="flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-blue-400" />
+                        <span>Official verified tick on store and all listings</span>
+                      </li>
+                      <li className="flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-blue-400" />
+                        <span>Builds instant trust with campus buyers</span>
+                      </li>
+                      <li className="flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-blue-400" />
+                        <span>Vetted student entrepreneur badge</span>
+                      </li>
+                    </ul>
+                  </div>
+
+                  <div>
+                    {currentStore.isVerified ? (
+                      <div className="text-center py-2 px-3 rounded-lg bg-blue-500/20 text-blue-300 text-xs font-semibold flex items-center justify-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-blue-400" />
+                        <span>✓ Officially Verified Store</span>
+                      </div>
+                    ) : currentStore.verificationRequested || currentStore.verificationStatus === 'pending' ? (
+                      <div className="text-center py-2 px-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-semibold flex items-center justify-center gap-1.5">
+                        <AlertTriangle className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+                        <span>Verification Under Review</span>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={handleRequestVerification}
+                        className="w-full py-2.5 px-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs transition-colors flex items-center justify-center gap-1.5 shadow-md shadow-blue-500/20 cursor-pointer"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>Request Verification Tick</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+
               </div>
             </div>
           )}

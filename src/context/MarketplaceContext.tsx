@@ -49,6 +49,7 @@ interface MarketplaceContextType {
   requestStoreVerification: (storeId: string) => void;
   verifyStore: (storeId: string) => void;
   rejectStore: (storeId: string) => void;
+  unverifyStore: (storeId: string) => void;
   freezeStore: (storeId: string, reason?: string) => void;
   unfreezeStore: (storeId: string) => void;
   deleteStore: (storeId: string) => void;
@@ -149,6 +150,21 @@ const STORAGE_KEYS = {
   EVENTS: 'hustlehub_events_live',
   USER: 'hustlehub_user_live',
   ADMIN: 'hustlehub_admin_live',
+};
+
+// Live Cross-Window & Installed PWA BroadcastChannel for zero-refresh updates
+const liveBroadcast = typeof window !== 'undefined' && 'BroadcastChannel' in window
+  ? new BroadcastChannel('hustlehub_live_sync')
+  : null;
+
+const notifyInstances = (type: string, data?: any) => {
+  if (liveBroadcast) {
+    try {
+      liveBroadcast.postMessage({ type, data, timestamp: Date.now() });
+    } catch {
+      // Ignore broadcast errors in restricted environments
+    }
+  }
 };
 
 const MarketplaceContext = createContext<MarketplaceContextType | undefined>(undefined);
@@ -258,15 +274,39 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
           const merged = nonDemoRemote.map(remoteStore => {
             const localStore = localMap.get(remoteStore.id);
             if (!localStore) return remoteStore;
+
+            // If the store was marked unverified, preserve the unverified state
+            let isVerified = false;
+            if (localStore.verificationStatus === 'unverified' && !localStore.isVerified) {
+              isVerified = false;
+            } else if (remoteStore.isVerified !== undefined) {
+              isVerified = Boolean(remoteStore.isVerified);
+            } else {
+              isVerified = Boolean(localStore.isVerified);
+            }
+
+            const isFrozen = Boolean(remoteStore.isFrozen !== undefined ? remoteStore.isFrozen : localStore.isFrozen);
+            const isFeatured = Boolean(remoteStore.isFeatured || localStore.isFeatured);
+            const hasPremiumLimit = Boolean(remoteStore.hasPremiumLimit || localStore.hasPremiumLimit);
+
             return {
+              ...localStore,
               ...remoteStore,
-              featuredRequested: remoteStore.featuredRequested || (localStore.featuredRequested && !remoteStore.isFeatured),
+              isVerified,
+              isFrozen,
+              isFeatured,
+              hasPremiumLimit,
+              featuredRequested: !isFeatured && Boolean(remoteStore.featuredRequested || localStore.featuredRequested),
               featuredRequestDate: remoteStore.featuredRequestDate || localStore.featuredRequestDate,
-              premiumRequested: remoteStore.premiumRequested || (localStore.premiumRequested && !remoteStore.hasPremiumLimit),
+              premiumRequested: !hasPremiumLimit && Boolean(remoteStore.premiumRequested || localStore.premiumRequested),
               premiumRequestDate: remoteStore.premiumRequestDate || localStore.premiumRequestDate,
-              verificationRequested: remoteStore.verificationRequested || (localStore.verificationRequested && !remoteStore.isVerified),
+              verificationRequested: !isVerified && Boolean(remoteStore.verificationRequested || localStore.verificationRequested),
               verificationRequestDate: remoteStore.verificationRequestDate || localStore.verificationRequestDate,
-              verificationStatus: remoteStore.verificationStatus || localStore.verificationStatus || (remoteStore.isVerified ? 'verified' : 'unverified'),
+              verificationStatus: isVerified
+                ? ('verified' as const)
+                : (localStore.verificationStatus === 'unverified'
+                    ? ('unverified' as const)
+                    : (remoteStore.verificationStatus || localStore.verificationStatus || ((remoteStore.verificationRequested || localStore.verificationRequested) ? 'pending' : 'unverified'))),
             };
           });
 
@@ -291,8 +331,26 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       const nonDemoRemoteProducts = (remoteProducts || []).filter(p => p && p.id && !p.id.startsWith('prod-demo'));
       
       setProducts(prev => {
-        // Start with remote products from Appwrite
-        const merged = [...nonDemoRemoteProducts];
+        // Build store lookup to strictly resolve storeIsVerified
+        let currentStores = stores;
+        try {
+          const raw = localStorage.getItem(STORAGE_KEYS.STORES);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) currentStores = parsed;
+          }
+        } catch {}
+        const storeMap = new Map(currentStores.map(s => [s.id, s]));
+
+        // Start with remote products from Appwrite, enforcing store's true verification state
+        const merged = nonDemoRemoteProducts.map(rp => {
+          const parent = storeMap.get(rp.storeId);
+          return {
+            ...rp,
+            storeIsVerified: parent ? Boolean(parent.isVerified) : Boolean(rp.storeIsVerified),
+          };
+        });
+
         // Retain local products that aren't in Appwrite yet so user doesn't lose data
         for (const localP of prev) {
           if (localP && localP.id && !localP.id.startsWith('prod-demo')) {
@@ -300,7 +358,12 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
               rp => rp.id === localP.id || (rp.title === localP.title && rp.storeId === localP.storeId)
             );
             if (!alreadyInRemote) {
-              merged.push({ ...localP, isSyncedToCloud: false });
+              const parent = storeMap.get(localP.storeId);
+              merged.push({
+                ...localP,
+                storeIsVerified: parent ? Boolean(parent.isVerified) : Boolean(localP.storeIsVerified),
+                isSyncedToCloud: false,
+              });
             }
           }
         }
@@ -422,6 +485,98 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       unsubscribe();
     };
   }, [appwriteConfig, syncWithAppwrite]);
+
+  // Real-time synchronization across installed PWA instances, windows, and tabs
+  useEffect(() => {
+    // 1. Listen for cross-window / PWA BroadcastChannel notifications
+    if (liveBroadcast) {
+      const handleBroadcast = (event: MessageEvent) => {
+        const { type, data } = event.data || {};
+        if (type === 'STORES_UPDATE' && Array.isArray(data)) {
+          setStores(data);
+        } else if (type === 'PRODUCTS_UPDATE' && Array.isArray(data)) {
+          setProducts(data);
+        } else if (type === 'SYNC_ALL') {
+          syncWithAppwrite().catch(() => {});
+        }
+      };
+      liveBroadcast.addEventListener('message', handleBroadcast);
+      return () => {
+        liveBroadcast.removeEventListener('message', handleBroadcast);
+      };
+    }
+  }, [syncWithAppwrite]);
+
+  // 2. Cross-tab & installed PWA storage event listener
+  useEffect(() => {
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === STORAGE_KEYS.STORES && e.newValue) {
+        try {
+          const fresh = JSON.parse(e.newValue);
+          if (Array.isArray(fresh)) {
+            setStores(fresh);
+          }
+        } catch {}
+      }
+      if (e.key === STORAGE_KEYS.PRODUCTS && e.newValue) {
+        try {
+          const fresh = JSON.parse(e.newValue);
+          if (Array.isArray(fresh)) {
+            setProducts(fresh);
+          }
+        } catch {}
+      }
+    };
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, []);
+
+  // 3. Periodic Background Polling & Visibility / Focus Sync
+  // Guarantees installed PWAs see newly verified stores and products without manual refresh
+  useEffect(() => {
+    const pollInterval = setInterval(() => {
+      if (appwriteConfig.projectId && appwriteConfig.databaseId) {
+        syncWithAppwrite().catch(() => {});
+      } else {
+        // Fallback: check localStorage for updates from other tabs
+        try {
+          const raw = localStorage.getItem(STORAGE_KEYS.STORES);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed) && parsed.length !== stores.length) {
+              setStores(parsed);
+            }
+          }
+        } catch {}
+      }
+    }, 6000);
+
+    const handleFocusOrVisible = () => {
+      if (document.visibilityState === 'visible') {
+        try {
+          const raw = localStorage.getItem(STORAGE_KEYS.STORES);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) setStores(parsed);
+          }
+        } catch {}
+        if (appwriteConfig.projectId && appwriteConfig.databaseId) {
+          syncWithAppwrite().catch(() => {});
+        }
+      }
+    };
+
+    window.addEventListener('focus', handleFocusOrVisible);
+    document.addEventListener('visibilitychange', handleFocusOrVisible);
+    window.addEventListener('online', handleFocusOrVisible);
+
+    return () => {
+      clearInterval(pollInterval);
+      window.removeEventListener('focus', handleFocusOrVisible);
+      document.removeEventListener('visibilitychange', handleFocusOrVisible);
+      window.removeEventListener('online', handleFocusOrVisible);
+    };
+  }, [appwriteConfig, syncWithAppwrite, stores.length]);
 
   // Save changes to localStorage as reliable cache
   useEffect(() => {
@@ -590,7 +745,7 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     ? stores.find(s => s.id === currentUser.storeId) || null
     : stores.find(s => s.ownerEmail.toLowerCase() === currentUser?.email.toLowerCase()) || null;
 
-  // Store Registration Flow - New stores register without verification tick until requested and approved!
+  // Store Registration Flow - New stores register and automatically submit verification request for admin review!
   const registerStore = async (storeData: Omit<Store, 'id' | 'ownerId' | 'whatsappClicks' | 'profileViews' | 'isVerified' | 'verificationStatus' | 'isFrozen' | 'isFeatured' | 'hasPremiumLimit' | 'createdAt' | 'rating' | 'reviewCount'>): Promise<Store> => {
     const ownerId = currentUser?.id || 'biz-' + Date.now();
     const newStore: Store = {
@@ -599,9 +754,10 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       ownerId,
       whatsappClicks: 0,
       profileViews: 1,
-      isVerified: false, // Must request verification tick to get verified badge
-      verificationStatus: 'unverified',
-      verificationRequested: false,
+      isVerified: false,
+      verificationStatus: 'pending', // Automatic pending verification request
+      verificationRequested: true,
+      verificationRequestDate: new Date().toISOString(),
       isFrozen: false,
       isFeatured: false,
       hasPremiumLimit: false,
@@ -610,7 +766,11 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       reviewCount: 0,
     };
 
-    setStores(prev => [newStore, ...prev]);
+    setStores(prev => {
+      const updated = [newStore, ...prev];
+      notifyInstances('STORES_UPDATE', updated);
+      return updated;
+    });
 
     // Push to Appwrite Database
     createStoreInAppwrite(newStore);
@@ -631,14 +791,18 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
   };
 
   const updateStoreProfile = (storeId: string, updates: Partial<Store>) => {
-    setStores(prev => prev.map(s => (s.id === storeId ? { ...s, ...updates } : s)));
+    setStores(prev => {
+      const updated = prev.map(s => (s.id === storeId ? { ...s, ...updates } : s));
+      notifyInstances('STORES_UPDATE', updated);
+      return updated;
+    });
     // Sync to Appwrite
     updateStoreInAppwrite(storeId, updates);
 
     // Also update denormalized store fields on products
     if (updates.name || updates.whatsappNumber || updates.location) {
-      setProducts(prev =>
-        prev.map(p =>
+      setProducts(prev => {
+        const updated = prev.map(p =>
           p.storeId === storeId
             ? {
                 ...p,
@@ -647,8 +811,10 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
                 storeLocation: updates.location || p.storeLocation,
               }
             : p
-        )
-      );
+        );
+        notifyInstances('PRODUCTS_UPDATE', updated);
+        return updated;
+      });
     }
   };
 
@@ -658,9 +824,11 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       verificationRequestDate: new Date().toISOString(),
       verificationStatus: 'pending' as const,
     };
-    setStores(prev =>
-      prev.map(s => (s.id === storeId ? { ...s, ...updates } : s))
-    );
+    setStores(prev => {
+      const updated = prev.map(s => (s.id === storeId ? { ...s, ...updates } : s));
+      notifyInstances('STORES_UPDATE', updated);
+      return updated;
+    });
     updateStoreInAppwrite(storeId, updates);
   };
 
@@ -670,14 +838,24 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       verificationStatus: 'verified' as const,
       verificationRequested: false,
     };
-    setStores(prev =>
-      prev.map(s =>
+    setStores(prev => {
+      const updated = prev.map(s =>
         s.id === storeId ? { ...s, ...updates } : s
-      )
-    );
-    setProducts(prev =>
-      prev.map(p => (p.storeId === storeId ? { ...p, storeIsVerified: true } : p))
-    );
+      );
+      try {
+        localStorage.setItem(STORAGE_KEYS.STORES, JSON.stringify(updated));
+      } catch {}
+      notifyInstances('STORES_UPDATE', updated);
+      return updated;
+    });
+    setProducts(prev => {
+      const updated = prev.map(p => (p.storeId === storeId ? { ...p, storeIsVerified: true } : p));
+      try {
+        localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(updated));
+      } catch {}
+      notifyInstances('PRODUCTS_UPDATE', updated);
+      return updated;
+    });
     // Sync to Appwrite
     updateStoreInAppwrite(storeId, updates);
   };
@@ -685,40 +863,62 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const rejectStore = (storeId: string) => {
     const updates = {
       isVerified: false,
-      verificationStatus: 'rejected' as const,
+      verificationStatus: 'unverified' as const,
       verificationRequested: false,
     };
-    setStores(prev =>
-      prev.map(s =>
+    setStores(prev => {
+      const updated = prev.map(s =>
         s.id === storeId ? { ...s, ...updates } : s
-      )
-    );
-    setProducts(prev =>
-      prev.map(p => (p.storeId === storeId ? { ...p, storeIsVerified: false } : p))
-    );
+      );
+      try {
+        localStorage.setItem(STORAGE_KEYS.STORES, JSON.stringify(updated));
+      } catch {}
+      notifyInstances('STORES_UPDATE', updated);
+      return updated;
+    });
+    setProducts(prev => {
+      const updated = prev.map(p => (p.storeId === storeId ? { ...p, storeIsVerified: false } : p));
+      try {
+        localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(updated));
+      } catch {}
+      notifyInstances('PRODUCTS_UPDATE', updated);
+      return updated;
+    });
     // Sync to Appwrite
     updateStoreInAppwrite(storeId, updates);
   };
 
   const freezeStore = (storeId: string, reason = 'Administrative review') => {
-    setStores(prev =>
-      prev.map(s => (s.id === storeId ? { ...s, isFrozen: true, freezeReason: reason } : s))
-    );
+    setStores(prev => {
+      const updated = prev.map(s => (s.id === storeId ? { ...s, isFrozen: true, freezeReason: reason } : s));
+      notifyInstances('STORES_UPDATE', updated);
+      return updated;
+    });
     // Sync to Appwrite
     updateStoreInAppwrite(storeId, { isFrozen: true, freezeReason: reason });
   };
 
   const unfreezeStore = (storeId: string) => {
-    setStores(prev =>
-      prev.map(s => (s.id === storeId ? { ...s, isFrozen: false, freezeReason: '' } : s))
-    );
+    setStores(prev => {
+      const updated = prev.map(s => (s.id === storeId ? { ...s, isFrozen: false, freezeReason: '' } : s));
+      notifyInstances('STORES_UPDATE', updated);
+      return updated;
+    });
     // Sync to Appwrite
     updateStoreInAppwrite(storeId, { isFrozen: false, freezeReason: '' });
   };
 
   const deleteStore = (storeId: string) => {
-    setStores(prev => prev.filter(s => s.id !== storeId));
-    setProducts(prev => prev.filter(p => p.storeId !== storeId));
+    setStores(prev => {
+      const updated = prev.filter(s => s.id !== storeId);
+      notifyInstances('STORES_UPDATE', updated);
+      return updated;
+    });
+    setProducts(prev => {
+      const updated = prev.filter(p => p.storeId !== storeId);
+      notifyInstances('PRODUCTS_UPDATE', updated);
+      return updated;
+    });
     // Sync to Appwrite
     deleteStoreInAppwrite(storeId);
   };
@@ -895,7 +1095,11 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
 
     // Instant local state update for zero-latency UI
-    setProducts(prev => [newProduct, ...prev]);
+    setProducts(prev => {
+      const updated = [newProduct, ...prev];
+      notifyInstances('PRODUCTS_UPDATE', updated);
+      return updated;
+    });
 
     return {
       success: isSynced,
@@ -962,12 +1166,20 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
   };
 
   const updateProduct = (productId: string, updates: Partial<Product>) => {
-    setProducts(prev => prev.map(p => (p.id === productId ? { ...p, ...updates } : p)));
+    setProducts(prev => {
+      const updated = prev.map(p => (p.id === productId ? { ...p, ...updates } : p));
+      notifyInstances('PRODUCTS_UPDATE', updated);
+      return updated;
+    });
     updateProductInAppwrite(productId, updates);
   };
 
   const deleteProduct = (productId: string) => {
-    setProducts(prev => prev.filter(p => p.id !== productId));
+    setProducts(prev => {
+      const updated = prev.filter(p => p.id !== productId);
+      notifyInstances('PRODUCTS_UPDATE', updated);
+      return updated;
+    });
     deleteProductInAppwrite(productId);
   };
 
@@ -1102,6 +1314,7 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         requestStoreVerification,
         verifyStore,
         rejectStore,
+        unverifyStore: rejectStore,
         freezeStore,
         unfreezeStore,
         deleteStore,

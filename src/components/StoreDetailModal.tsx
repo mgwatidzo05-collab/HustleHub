@@ -105,11 +105,11 @@ export const StoreDetailModal: React.FC<StoreDetailModalProps> = ({
                     <span className="text-blue-400" title="Verified Campus Business">
                       <CheckCircle2 className="w-5 h-5" />
                     </span>
-                  ) : (
+                  ) : (store.verificationRequested || store.verificationStatus === 'pending') ? (
                     <span className="text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-medium border border-amber-500/30">
                       Pending Verification
                     </span>
-                  )}
+                  ) : null}
                 </div>
                 <p className="text-xs text-orange-400 font-medium">
                   {store.tagline || store.category.replace('_', ' ')}

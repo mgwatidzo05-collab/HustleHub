@@ -538,7 +538,7 @@ export const fetchProductsFromAppwrite = async (): Promise<Product[] | null> => 
         storeName: doc.storeName || doc.storename || '',
         storeWhatsApp: doc.storeWhatsApp || doc.storewhatsapp || doc.whatsapp || doc.store_whatsapp || '',
         storeLocation: doc.storeLocation || doc.storelocation || '',
-        storeIsVerified: doc.storeIsVerified !== undefined ? Boolean(doc.storeIsVerified) : (doc.storeisverified !== undefined ? Boolean(doc.storeisverified) : true),
+        storeIsVerified: doc.storeIsVerified !== undefined ? Boolean(doc.storeIsVerified) : (doc.storeisverified !== undefined ? Boolean(doc.storeisverified) : false),
         title: doc.title || doc.name || '',
         description: doc.description || doc.desc || '',
         price: Number(doc.price) || 0,
@@ -642,7 +642,7 @@ export const updateStoreInAppwrite = async (storeId: string, updates: Partial<St
 
   const collId = config.storesCollectionId || 'stores';
   const clean = cleanPayload(updates);
-  const safeDocId = storeId.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 36);
+  let targetDocId = (updates as any).appwriteDocId || storeId.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 36);
 
   // Provide dual casing aliases
   if (updates.isVerified !== undefined) {
@@ -676,28 +676,51 @@ export const updateStoreInAppwrite = async (storeId: string, updates: Partial<St
 
   // Resilient update loop: if any attribute is rejected by Appwrite schema, drop it and retry
   const payloadToUpdate = { ...clean };
-  for (let attempt = 0; attempt < 8; attempt++) {
-    try {
-      await databases.updateDocument(
-        config.databaseId,
-        collId,
-        safeDocId,
-        payloadToUpdate
-      );
-      return;
-    } catch (err: any) {
-      const msg = String(err?.message || '');
-      const prohibitedMatch =
-        msg.match(/attribute\s+["']?([a-zA-Z0-9_]+)["']?\s+is not allowed/i) ||
-        msg.match(/prohibited attribute\s*[:]?\s*["']?([a-zA-Z0-9_]+)["']?/i) ||
-        msg.match(/unknown attribute\s*[:]?\s*["']?([a-zA-Z0-9_]+)["']?/i);
 
-      if (prohibitedMatch && prohibitedMatch[1]) {
-        delete payloadToUpdate[prohibitedMatch[1]];
-        continue;
+  const tryUpdate = async (docIdToUse: string): Promise<boolean> => {
+    for (let attempt = 0; attempt < 8; attempt++) {
+      try {
+        await databases.updateDocument(
+          config.databaseId,
+          collId,
+          docIdToUse,
+          payloadToUpdate
+        );
+        return true;
+      } catch (err: any) {
+        const msg = String(err?.message || '');
+        if (msg.includes('document_not_found') || msg.includes('could not be found')) {
+          return false;
+        }
+        const prohibitedMatch =
+          msg.match(/attribute\s+["']?([a-zA-Z0-9_]+)["']?\s+is not allowed/i) ||
+          msg.match(/prohibited attribute\s*[:]?\s*["']?([a-zA-Z0-9_]+)["']?/i) ||
+          msg.match(/unknown attribute\s*[:]?\s*["']?([a-zA-Z0-9_]+)["']?/i);
+
+        if (prohibitedMatch && prohibitedMatch[1]) {
+          delete payloadToUpdate[prohibitedMatch[1]];
+          continue;
+        }
+        console.warn('Appwrite updateStore warning:', msg);
+        break;
       }
-      console.warn('Appwrite updateStore warning:', msg);
-      break;
+    }
+    return false;
+  };
+
+  const directSuccess = await tryUpdate(targetDocId);
+  if (!directSuccess) {
+    // Document not found by targetDocId - query to locate the actual document in Appwrite
+    try {
+      const listRes = await databases.listDocuments(config.databaseId, collId, [Query.limit(100)]);
+      const match = listRes.documents.find(
+        (d: any) => d.id === storeId || d.$id === storeId || (updates.name && d.name === updates.name)
+      );
+      if (match) {
+        await tryUpdate(match.$id);
+      }
+    } catch (lookupErr) {
+      console.warn('Lookup store document in Appwrite error:', lookupErr);
     }
   }
 };

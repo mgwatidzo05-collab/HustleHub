@@ -77,14 +77,10 @@ export const StoreCard: React.FC<StoreCardProps> = ({
             </span>
           ) : null}
 
-          {store.isVerified ? (
+          {store.isVerified && (
             <span className="px-2 py-0.5 rounded bg-blue-500/90 text-white text-[10px] font-bold flex items-center gap-1 shadow-sm">
               <CheckCircle2 className="w-3 h-3" />
               Verified
-            </span>
-          ) : (
-            <span className="px-2 py-0.5 rounded bg-slate-900/90 text-amber-400 text-[10px] font-medium border border-amber-500/30">
-              Pending Verification
             </span>
           )}
         </div>

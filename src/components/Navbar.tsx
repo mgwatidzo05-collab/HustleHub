@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { useMarketplace } from '../context/MarketplaceContext';
 import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface NavbarProps {
   onOpenAuth: () => void;
@@ -96,8 +97,9 @@ export const Navbar: React.FC<NavbarProps> = ({
               </span>
             </a>
 
-            {/* Right: ONLY Menu Button */}
+            {/* Right: Install App & Menu Button */}
             <div className="flex items-center gap-2">
+              <PWAInstallButton variant="compact" />
               <button
                 onClick={() => setMenuOpen(!menuOpen)}
                 className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-200 hover:text-white transition-all active:scale-95 cursor-pointer shadow-sm"
@@ -333,6 +335,11 @@ export const Navbar: React.FC<NavbarProps> = ({
                     </span>
                   )}
                 </button>
+              </div>
+
+              {/* Install HustleHub PWA */}
+              <div className="pt-2">
+                <PWAInstallButton variant="banner" onInstalled={() => setMenuOpen(false)} />
               </div>
             </div>
 

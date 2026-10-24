@@ -24,6 +24,9 @@ import {
   Database,
   FolderLock,
   Key,
+  Search,
+  MapPin,
+  Truck,
 } from 'lucide-react';
 import { Store, Product, ReportedContent } from '../types';
 import { useMarketplace } from '../context/MarketplaceContext';
@@ -79,10 +82,11 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
   const [passwordInput, setPasswordInput] = useState('');
   const [authError, setAuthError] = useState('');
 
-  // Admin Navigation Tabs
-  const [activeTab, setActiveTab] = useState<'analytics' | 'stores' | 'promotions' | 'products' | 'reports' | 'appwrite'>('analytics');
-  const [storeFilter, setStoreFilter] = useState<'all' | 'pending' | 'verified' | 'featured' | 'premium' | 'frozen'>('pending');
+  // Admin Navigation Tabs - Dedicated Store Verification Requests section
+  const [activeTab, setActiveTab] = useState<'verifications' | 'stores' | 'promotions' | 'analytics' | 'products' | 'reports' | 'appwrite'>('verifications');
+  const [storeFilter, setStoreFilter] = useState<'all' | 'pending' | 'verified' | 'unverified' | 'featured' | 'premium' | 'frozen'>('pending');
   const [expandedStoreId, setExpandedStoreId] = useState<string | null>(null);
+  const [verificationSearch, setVerificationSearch] = useState('');
   const [copiedSchema, setCopiedSchema] = useState(false);
 
   // Appwrite Config Form State
@@ -137,13 +141,14 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
     }
   };
 
-  const pendingStores = stores.filter((s) => s.verificationStatus === 'pending');
-  const verifiedStores = stores.filter((s) => s.verificationStatus === 'verified');
+  const pendingStores = stores.filter((s) => !s.isVerified && (s.verificationStatus === 'pending' || s.verificationRequested));
+  const verifiedStores = stores.filter((s) => Boolean(s.isVerified));
+  const unverifiedStores = stores.filter((s) => !s.isVerified && s.verificationStatus !== 'pending' && !s.verificationRequested);
   const featuredStores = stores.filter((s) => s.isFeatured);
   const premiumStores = stores.filter((s) => s.hasPremiumLimit);
   const frozenStores = stores.filter((s) => s.isFrozen);
 
-  // Promotion Requests
+  // Paid Promotion & Upgrade Requests ($2 Featured & $1 Premium)
   const requestedFeaturedStores = stores.filter((s) => s.featuredRequested && !s.isFeatured);
   const requestedPremiumStores = stores.filter((s) => s.premiumRequested && !s.hasPremiumLimit);
   const totalPromotionRequests = requestedFeaturedStores.length + requestedPremiumStores.length;
@@ -155,6 +160,8 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
         return pendingStores;
       case 'verified':
         return verifiedStores;
+      case 'unverified':
+        return unverifiedStores;
       case 'featured':
         return featuredStores;
       case 'premium':
@@ -193,6 +200,8 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
           'hasPremiumLimit (boolean)',
           'featuredRequested (boolean)',
           'premiumRequested (boolean)',
+          'verificationRequested (boolean)',
+          'verificationRequestDate (string, 50)',
           'logoUrl (string, 1000)',
           'bannerUrl (string, 1000)',
           'ownerId (string, 100)',
@@ -343,15 +352,20 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
             {/* Top Navigation Tabs */}
             <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 pb-3">
               <button
-                onClick={() => setActiveTab('analytics')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
-                  activeTab === 'analytics'
-                    ? 'bg-orange-500 text-white'
+                onClick={() => setActiveTab('verifications')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors relative cursor-pointer ${
+                  activeTab === 'verifications'
+                    ? 'bg-blue-600 text-white shadow-md shadow-blue-500/25'
                     : 'text-slate-400 hover:text-white hover:bg-slate-800'
                 }`}
               >
-                <TrendingUp className="w-3.5 h-3.5" />
-                <span>Sales & Traffic Analytics</span>
+                <ShieldCheck className="w-3.5 h-3.5 text-blue-400" />
+                <span>Store Verification Requests</span>
+                {pendingStores.length > 0 && (
+                  <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-amber-500 text-black font-bold animate-pulse">
+                    {pendingStores.length} new
+                  </span>
+                )}
               </button>
 
               <button
@@ -363,15 +377,9 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                 }`}
               >
                 <StoreIcon className="w-3.5 h-3.5" />
-                <span>Stores & Verification</span>
-                {pendingStores.length > 0 && (
-                  <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-orange-600 text-white font-bold">
-                    {pendingStores.length}
-                  </span>
-                )}
+                <span>All Stores ({stores.length})</span>
               </button>
 
-              {/* NEW: Promotions & Upgrades Tab */}
               <button
                 onClick={() => setActiveTab('promotions')}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors relative cursor-pointer ${
@@ -387,6 +395,18 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                     {totalPromotionRequests} new
                   </span>
                 )}
+              </button>
+
+              <button
+                onClick={() => setActiveTab('analytics')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                  activeTab === 'analytics'
+                    ? 'bg-orange-500 text-white'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                <TrendingUp className="w-3.5 h-3.5" />
+                <span>Sales & Traffic Analytics</span>
               </button>
 
               <button
@@ -422,14 +442,289 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                 }`}
               >
                 <Server className="w-3.5 h-3.5" />
-                <span>Appwrite Database & Tables Guide</span>
+                <span>Appwrite Database Guide</span>
               </button>
             </div>
 
-            {/* TAB 1: DETAILED ANALYTICS */}
+            {/* DEDICATED SECTION: STORE VERIFICATION REQUESTS */}
+            {activeTab === 'verifications' && (
+              <div className="space-y-6">
+                {/* Section Hero Banner */}
+                <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-blue-950/60 via-slate-900 to-slate-900 border border-blue-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="flex items-start gap-3.5">
+                    <div className="w-11 h-11 rounded-xl bg-blue-500/20 text-blue-400 border border-blue-500/30 flex items-center justify-center shrink-0 shadow-md shadow-blue-500/10">
+                      <ShieldCheck className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="text-base font-bold text-white">
+                          Store Verification Requests
+                        </h3>
+                        {pendingStores.length > 0 ? (
+                          <span className="text-xs px-2.5 py-0.5 rounded-full bg-amber-500 text-black font-bold animate-pulse">
+                            {pendingStores.length} Pending Review
+                          </span>
+                        ) : (
+                          <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-semibold border border-emerald-500/30">
+                            0 Pending
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-slate-300 mt-1 max-w-2xl leading-relaxed">
+                        Every newly registered student business requires supervisor review to grant the official Campus Verification Tick (Blue Badge). Review campus locations, phone numbers, and listed goods to keep the student marketplace safe.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 text-xs text-slate-400 bg-slate-950/60 px-3.5 py-2 rounded-xl border border-slate-800 shrink-0 self-start sm:self-auto">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                    <span>Total Verified: <strong className="text-white">{verifiedStores.length}</strong> stores</span>
+                  </div>
+                </div>
+
+                {/* Search / Filter for Requests if there are multiple */}
+                {pendingStores.length > 1 && (
+                  <div className="relative">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+                    <input
+                      type="text"
+                      placeholder="Search pending store requests by name, owner, or hostel..."
+                      value={verificationSearch}
+                      onChange={(e) => setVerificationSearch(e.target.value)}
+                      className="w-full bg-slate-950 text-xs text-slate-100 pl-10 pr-4 py-2.5 rounded-xl border border-slate-800 focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                )}
+
+                {/* Section A: Pending Stores List */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
+                      <AlertTriangle className="w-4 h-4" />
+                      <span>Stores Awaiting Verification Approval ({pendingStores.length})</span>
+                    </h4>
+                  </div>
+
+                  {pendingStores.length === 0 ? (
+                    <div className="p-8 text-center bg-slate-950/40 rounded-xl border border-dashed border-slate-800 text-slate-400 space-y-2">
+                      <CheckCircle2 className="w-9 h-9 text-emerald-400 mx-auto opacity-90" />
+                      <div className="text-white font-bold text-sm">No Pending Requests</div>
+                      <p className="text-xs text-slate-400 max-w-md mx-auto">
+                        All student businesses have been vetted! When new students register their store or request an official blue tick, their requests will appear right here in this section.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3.5">
+                      {pendingStores
+                        .filter(s => {
+                          if (!verificationSearch.trim()) return true;
+                          const q = verificationSearch.toLowerCase();
+                          return s.name.toLowerCase().includes(q) || s.ownerName.toLowerCase().includes(q) || s.location.toLowerCase().includes(q);
+                        })
+                        .map((store) => {
+                          const storeProds = products.filter((p) => p.storeId === store.id);
+                          const isExpanded = expandedStoreId === store.id;
+                          const cleanPhone = (store.whatsappNumber || '').replace(/[^0-9]/g, '');
+
+                          return (
+                            <div
+                              key={`req-${store.id}`}
+                              className="p-4 sm:p-5 rounded-2xl bg-slate-950 border border-amber-500/40 shadow-xl space-y-4 hover:border-amber-500/60 transition-all"
+                            >
+                              <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
+                                <div className="flex items-start gap-3.5 min-w-0">
+                                  <img
+                                    src={store.logoUrl || '/assets/aistudio/ss_b06f2828.PNG'}
+                                    alt=""
+                                    className="w-14 h-14 rounded-xl object-cover bg-slate-900 border border-slate-700 shrink-0"
+                                  />
+                                  <div className="min-w-0">
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <h4 className="text-base font-bold text-white truncate">
+                                        {store.name}
+                                      </h4>
+                                      <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-bold border border-amber-500/40 flex items-center gap-1">
+                                        <AlertTriangle className="w-3 h-3" />
+                                        Pending Verification Review
+                                      </span>
+                                      <span className="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-medium capitalize">
+                                        {store.category.replace('_', ' ')}
+                                      </span>
+                                    </div>
+
+                                    {store.tagline && (
+                                      <p className="text-xs text-orange-400 font-medium mt-0.5">
+                                        "{store.tagline}"
+                                      </p>
+                                    )}
+
+                                    <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                                      {store.description}
+                                    </p>
+
+                                    {/* Rich Metadata details */}
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5 text-xs text-slate-400 mt-3 pt-3 border-t border-slate-800/80 bg-slate-900/40 p-3 rounded-xl">
+                                      <div className="flex items-center gap-1.5 truncate">
+                                        <span className="text-slate-500">Student Owner:</span>
+                                        <strong className="text-slate-200">{store.ownerName}</strong>
+                                      </div>
+                                      <div className="flex items-center gap-1.5 truncate">
+                                        <span className="text-slate-500">Email:</span>
+                                        <span className="text-slate-300 truncate">{store.ownerEmail}</span>
+                                      </div>
+                                      <div className="flex items-center gap-1.5 truncate">
+                                        <MapPin className="w-3.5 h-3.5 text-orange-400 shrink-0" />
+                                        <span className="text-slate-500">Campus Location:</span>
+                                        <strong className="text-slate-200 truncate">{store.location} ({store.university})</strong>
+                                      </div>
+                                      <div className="flex items-center gap-1.5 truncate">
+                                        <MessageCircle className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                                        <span className="text-slate-500">WhatsApp:</span>
+                                        <strong className="text-emerald-400">{store.whatsappNumber}</strong>
+                                      </div>
+                                      <div className="flex items-center gap-1.5">
+                                        <Truck className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                                        <span className="text-slate-500">Delivery:</span>
+                                        <span className="text-slate-200">{store.delivers ? store.deliveryNotes || 'Free on-campus' : 'Pickup only'}</span>
+                                      </div>
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="text-slate-500">Request Date:</span>
+                                        <span className="text-slate-300">{store.verificationRequestDate ? new Date(store.verificationRequestDate).toLocaleDateString() : 'New Registration'}</span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Decision Actions */}
+                                <div className="flex flex-wrap sm:flex-col items-stretch gap-2 shrink-0 self-end sm:self-start">
+                                  <button
+                                    onClick={() => verifyStore(store.id)}
+                                    className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-900/30 transition-all active:scale-95 cursor-pointer"
+                                  >
+                                    <CheckCircle2 className="w-4 h-4" />
+                                    <span>Grant Verification Tick</span>
+                                  </button>
+
+                                  <a
+                                    href={`https://wa.me/${cleanPhone}?text=${encodeURIComponent(`Hi ${store.ownerName}! This is HustleHub Admin regarding your store "${store.name}" on ${store.university} campus.`)}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-emerald-950/60 text-slate-300 hover:text-emerald-300 border border-slate-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                                  >
+                                    <MessageCircle className="w-3.5 h-3.5 text-emerald-400" />
+                                    <span>Chat on WhatsApp</span>
+                                  </a>
+
+                                  <button
+                                    onClick={() => rejectStore(store.id)}
+                                    className="px-3 py-2 rounded-xl bg-slate-900 hover:bg-rose-950 text-slate-400 hover:text-rose-300 border border-slate-800 hover:border-rose-900 text-xs font-medium transition-colors cursor-pointer"
+                                  >
+                                    Decline Request
+                                  </button>
+                                </div>
+                              </div>
+
+                              {/* Products Preview Drawer */}
+                              <div className="pt-2 border-t border-slate-800 flex items-center justify-between text-xs">
+                                <span className="text-slate-400">
+                                  Current Inventory: <strong className="text-white">{storeProds.length} item(s) listed</strong>
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => setExpandedStoreId(isExpanded ? null : store.id)}
+                                  className="text-orange-400 hover:text-orange-300 flex items-center gap-1 font-semibold cursor-pointer"
+                                >
+                                  <span>{isExpanded ? 'Hide Products' : 'Inspect Products Before Verifying'}</span>
+                                  {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                                </button>
+                              </div>
+
+                              {isExpanded && (
+                                <div className="pt-2 space-y-2">
+                                  {storeProds.length === 0 ? (
+                                    <p className="text-xs text-slate-500 italic p-3 bg-slate-900/60 rounded-xl">No products added by this store yet. You can still verify the store profile so all items they post will be verified.</p>
+                                  ) : (
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
+                                      {storeProds.map((p) => (
+                                        <div key={p.id} className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 flex items-center gap-2.5">
+                                          <img src={p.images[0]} alt="" className="w-10 h-10 rounded-lg object-cover shrink-0 border border-slate-700" />
+                                          <div className="truncate text-xs">
+                                            <div className="font-semibold text-white truncate">{p.title}</div>
+                                            <div className="text-orange-400 font-bold">{p.currency}{p.price}</div>
+                                            <div className="text-[10px] text-slate-400 capitalize">{p.condition} · {p.category}</div>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Section B: Currently Verified Active Stores Directory */}
+                <div className="p-4 sm:p-5 rounded-2xl bg-slate-950/70 border border-slate-800 space-y-3.5">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+                    <div>
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-blue-400" />
+                        <span>Verified Student Businesses Directory ({verifiedStores.length})</span>
+                      </h4>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        These stores hold the official verified blue tick badge on their storefront and listings.
+                      </p>
+                    </div>
+                  </div>
+
+                  {verifiedStores.length === 0 ? (
+                    <p className="text-xs text-slate-500 py-3 text-center">No verified stores on campus yet.</p>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      {verifiedStores.map((store) => (
+                        <div
+                          key={`verdir-${store.id}`}
+                          className="p-3 rounded-xl bg-slate-900 border border-slate-800/80 flex items-center justify-between gap-3 text-xs"
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            <img
+                              src={store.logoUrl || '/assets/aistudio/ss_b06f2828.PNG'}
+                              alt=""
+                              className="w-10 h-10 rounded-xl object-cover bg-slate-800 shrink-0 border border-slate-700"
+                            />
+                            <div className="truncate">
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-bold text-white truncate">{store.name}</span>
+                                <CheckCircle2 className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                              </div>
+                              <span className="text-[11px] text-slate-400 truncate block mt-0.5">
+                                {store.ownerName} · {store.location}
+                              </span>
+                            </div>
+                          </div>
+
+                          <button
+                            onClick={() => rejectStore(store.id)}
+                            className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-rose-950/60 text-slate-400 hover:text-rose-300 border border-slate-700/60 text-[11px] font-medium transition-colors shrink-0 cursor-pointer"
+                            title="Revoke verification tick"
+                          >
+                            Revoke Tick
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* TAB: DETAILED ANALYTICS */}
             {activeTab === 'analytics' && (
               <div className="space-y-6">
-                
+
                 {/* Metric Summary Cards */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800">
@@ -623,6 +918,17 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                   </button>
 
                   <button
+                    onClick={() => setStoreFilter('unverified')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                      storeFilter === 'unverified'
+                        ? 'bg-orange-500 text-white'
+                        : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+                    }`}
+                  >
+                    <span>Unverified ({unverifiedStores.length})</span>
+                  </button>
+
+                  <button
                     onClick={() => setStoreFilter('featured')}
                     className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
                       storeFilter === 'featured'
@@ -686,7 +992,7 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                           className={`p-4 rounded-xl border transition-all ${
                             store.isFrozen
                               ? 'bg-rose-950/20 border-rose-900/40'
-                              : store.verificationStatus === 'pending'
+                              : (!store.isVerified && (store.verificationStatus === 'pending' || store.verificationRequested))
                               ? 'bg-amber-950/15 border-amber-500/40'
                               : 'bg-slate-950/70 border-slate-800'
                           }`}
@@ -704,12 +1010,18 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                                     {store.name}
                                   </h4>
                                   {store.isVerified ? (
-                                    <span className="text-[10px] px-2 py-0.5 rounded bg-blue-500/20 text-blue-400 font-semibold border border-blue-500/30">
-                                      Verified
+                                    <span className="text-[10px] px-2 py-0.5 rounded bg-blue-500/20 text-blue-400 font-semibold border border-blue-500/30 flex items-center gap-1">
+                                      <CheckCircle2 className="w-3 h-3" />
+                                      Verified Tick
+                                    </span>
+                                  ) : store.verificationRequested || store.verificationStatus === 'pending' ? (
+                                    <span className="text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-semibold border border-amber-500/30 flex items-center gap-1">
+                                      <AlertTriangle className="w-3 h-3" />
+                                      Requested Verification Tick
                                     </span>
                                   ) : (
-                                    <span className="text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-semibold border border-amber-500/30">
-                                      Pending Verification
+                                    <span className="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-400 font-medium">
+                                      Unverified Store
                                     </span>
                                   )}
                                   {store.isFeatured && (
@@ -747,13 +1059,32 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
 
                             {/* Admin Action Buttons */}
                             <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
-                              {/* Verify / Reject for Pending Stores */}
-                              {!store.isVerified && (
+                              {/* Grant / Decline / Revoke Verification */}
+                              {!store.isVerified ? (
+                                <div className="flex items-center gap-1.5">
+                                  <button
+                                    onClick={() => verifyStore(store.id)}
+                                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-colors cursor-pointer flex items-center gap-1 shadow-sm"
+                                  >
+                                    <CheckCircle2 className="w-3.5 h-3.5" />
+                                    <span>Grant Verification Tick</span>
+                                  </button>
+                                  {(store.verificationRequested || store.verificationStatus === 'pending') && (
+                                    <button
+                                      onClick={() => rejectStore(store.id)}
+                                      className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition-colors cursor-pointer"
+                                    >
+                                      Decline
+                                    </button>
+                                  )}
+                                </div>
+                              ) : (
                                 <button
-                                  onClick={() => verifyStore(store.id)}
-                                  className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-colors cursor-pointer"
+                                  onClick={() => rejectStore(store.id)}
+                                  className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-rose-950/60 text-slate-400 hover:text-rose-300 border border-slate-700/60 text-xs font-medium transition-colors cursor-pointer"
+                                  title="Revoke verification tick"
                                 >
-                                  Verify & Publish
+                                  Revoke Tick
                                 </button>
                               )}
 

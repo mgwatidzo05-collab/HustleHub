@@ -64,7 +64,9 @@ export const FeaturedStoresSection: React.FC<FeaturedStoresSectionProps> = ({
                     <h3 className="text-sm font-bold text-white truncate group-hover:text-orange-400 transition-colors">
                       {store.name}
                     </h3>
-                    <CheckCircle2 className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                    {store.isVerified && (
+                      <CheckCircle2 className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                    )}
                   </div>
                   <p className="text-xs text-slate-400 line-clamp-1 mt-0.5">
                     {store.tagline || store.description}

@@ -207,7 +207,8 @@ const MarketplaceApp: React.FC = () => {
       return false;
     }
 
-    if (filterVerifiedOnly && !prod.storeIsVerified) {
+    const isParentVerified = parentStore ? Boolean(parentStore.isVerified) : Boolean(prod.storeIsVerified);
+    if (filterVerifiedOnly && !isParentVerified) {
       return false;
     }
 
