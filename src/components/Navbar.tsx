@@ -10,6 +10,7 @@ import {
   LogOut,
   MapPin,
   ChevronDown,
+  Bell,
   Sparkles,
   Lock,
   FileText,
@@ -24,6 +25,7 @@ interface NavbarProps {
   onOpenStoreLogin: () => void;
   onOpenStoreDashboard: () => void;
   onOpenAdmin: () => void;
+  onOpenNotifications: () => void;
   activeTab: 'marketplace' | 'stores';
   setActiveTab: (tab: 'marketplace' | 'stores') => void;
 }
@@ -34,6 +36,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenStoreLogin,
   onOpenStoreDashboard,
   onOpenAdmin,
+  onOpenNotifications,
   activeTab,
   setActiveTab,
 }) => {
@@ -46,6 +49,8 @@ export const Navbar: React.FC<NavbarProps> = ({
     setSelectedUniversity,
     stores,
     openTerms,
+    unreadNotificationsCount,
+    unreadNewProductsCount,
   } = useMarketplace();
 
   const [menuOpen, setMenuOpen] = useState(false);
@@ -73,7 +78,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   return (
     <>
-      {/* Top Navbar: ONLY HustleHub name/logo and Menu button */}
+      {/* Top Navbar: HustleHub brand, Notification Bell, PWA button, and Menu button */}
       <header className="sticky top-0 z-40 bg-[#0B0F17]/95 backdrop-blur-md border-b border-slate-800/80">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
@@ -97,9 +102,25 @@ export const Navbar: React.FC<NavbarProps> = ({
               </span>
             </a>
 
-            {/* Right: Install App & Menu Button */}
+            {/* Right: Notification Bell, Install App & Menu Button */}
             <div className="flex items-center gap-2">
+              {/* Notification Bell with Realtime Badge Count */}
+              <button
+                onClick={onOpenNotifications}
+                className="relative p-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white transition-all active:scale-95 cursor-pointer shadow-sm"
+                aria-label="View notifications"
+                title="Notifications"
+              >
+                <Bell className="w-4 h-4 text-orange-400" />
+                {unreadNotificationsCount > 0 && (
+                  <span className="absolute -top-1 -right-1 px-1.5 py-0.2 min-w-[18px] h-[18px] text-[10px] font-black rounded-full bg-orange-500 text-white flex items-center justify-center shadow-md animate-pulse">
+                    {unreadNotificationsCount > 9 ? '9+' : unreadNotificationsCount}
+                  </span>
+                )}
+              </button>
+
               <PWAInstallButton variant="compact" />
+
               <button
                 onClick={() => setMenuOpen(!menuOpen)}
                 className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-200 hover:text-white transition-all active:scale-95 cursor-pointer shadow-sm"
@@ -111,7 +132,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 ) : (
                   <Menu className="w-4 h-4 text-orange-400" />
                 )}
-                {(pendingStoresCount > 0 || pendingRequestsCount > 0) && (
+                {(pendingStoresCount > 0 || pendingRequestsCount > 0 || unreadNotificationsCount > 0) && (
                   <span className="w-2 h-2 rounded-full bg-orange-500 animate-pulse" />
                 )}
               </button>
@@ -305,6 +326,32 @@ export const Navbar: React.FC<NavbarProps> = ({
                     </button>
                   </div>
                 )}
+              </div>
+
+              {/* Notifications Link */}
+              <div className="pt-2 border-t border-slate-800">
+                <button
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onOpenNotifications();
+                  }}
+                  className="w-full p-3 rounded-xl bg-slate-950/40 border border-slate-800 hover:bg-slate-800 text-left text-sm font-semibold flex items-center justify-between text-slate-200 transition-all cursor-pointer"
+                >
+                  <div className="flex items-center gap-3">
+                    <Bell className="w-5 h-5 text-orange-400" />
+                    <div>
+                      <div>Notifications Center</div>
+                      <div className="text-xs font-normal text-slate-400">
+                        Live alerts & campus updates
+                      </div>
+                    </div>
+                  </div>
+                  {unreadNotificationsCount > 0 && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-orange-500 text-white font-bold">
+                      {unreadNotificationsCount} new
+                    </span>
+                  )}
+                </button>
               </div>
 
               {/* Admin Portal Link */}

@@ -1,5 +1,14 @@
-import { Client, Account, Databases, Storage, ID, Query, OAuthProvider, Permission, Role } from 'appwrite';
-import { AppwriteConfig, Store, Product, ReportedContent, AnalyticsEvent } from '../types';
+import { Client, Account, Databases, Storage, Messaging, Functions, ID, Query, OAuthProvider, Permission, Role } from 'appwrite';
+import {
+  AppwriteConfig,
+  Store,
+  Product,
+  ReportedContent,
+  AnalyticsEvent,
+  PremiumRequest,
+  Subscription,
+  AppwriteNotification,
+} from '../types';
 
 const STORAGE_KEY_APPWRITE = 'hustlehub_appwrite_config';
 
@@ -13,6 +22,12 @@ export const defaultAppwriteConfig: AppwriteConfig = {
   productsCollectionId: import.meta.env.VITE_APPWRITE_PRODUCTS_COLLECTION_ID || 'products',
   reportsCollectionId: import.meta.env.VITE_APPWRITE_REPORTS_COLLECTION_ID || 'reports',
   eventsCollectionId: import.meta.env.VITE_APPWRITE_EVENTS_COLLECTION_ID || 'analytics_events',
+  premiumRequestsCollectionId: import.meta.env.VITE_APPWRITE_PREMIUM_REQUESTS_COLLECTION_ID || 'premium_requests',
+  subscriptionsCollectionId: import.meta.env.VITE_APPWRITE_SUBSCRIPTIONS_COLLECTION_ID || 'subscriptions',
+  notificationsCollectionId: import.meta.env.VITE_APPWRITE_NOTIFICATIONS_COLLECTION_ID || 'notifications',
+  cloudFunctionId: import.meta.env.VITE_APPWRITE_CLOUD_FUNCTION_ID || 'send-push-notification',
+  fcmProviderId: import.meta.env.VITE_APPWRITE_FCM_PROVIDER_ID || 'fcm-provider',
+  pushNotificationsEnabled: true,
   isConfigured: Boolean(import.meta.env.VITE_APPWRITE_PROJECT_ID),
 };
 
@@ -39,6 +54,8 @@ let clientInstance: Client | null = null;
 let accountInstance: Account | null = null;
 let databasesInstance: Databases | null = null;
 let storageInstance: Storage | null = null;
+let messagingInstance: Messaging | null = null;
+let functionsInstance: Functions | null = null;
 
 export const initAppwrite = (config = getStoredAppwriteConfig()) => {
   if (!config.projectId) {
@@ -46,6 +63,8 @@ export const initAppwrite = (config = getStoredAppwriteConfig()) => {
     accountInstance = null;
     databasesInstance = null;
     storageInstance = null;
+    messagingInstance = null;
+    functionsInstance = null;
     return null;
   }
 
@@ -59,8 +78,17 @@ export const initAppwrite = (config = getStoredAppwriteConfig()) => {
     accountInstance = new Account(client);
     databasesInstance = new Databases(client);
     storageInstance = new Storage(client);
+    messagingInstance = new Messaging(client);
+    functionsInstance = new Functions(client);
 
-    return { client, account: accountInstance, databases: databasesInstance, storage: storageInstance };
+    return {
+      client,
+      account: accountInstance,
+      databases: databasesInstance,
+      storage: storageInstance,
+      messaging: messagingInstance,
+      functions: functionsInstance,
+    };
   } catch (err) {
     console.error('Failed to init Appwrite client:', err);
     return null;
@@ -79,6 +107,8 @@ export const getAppwrite = () => {
     account: accountInstance,
     databases: databasesInstance,
     storage: storageInstance,
+    messaging: messagingInstance,
+    functions: functionsInstance,
     ID,
     OAuthProvider,
   };
@@ -436,13 +466,13 @@ export const fetchStoresFromAppwrite = async (): Promise<Store[] | null> => {
     let res;
     try {
       res = await databases.listDocuments(config.databaseId, collId, [
-        Query.limit(100),
+        Query.limit(20),
         Query.orderDesc('$createdAt'),
       ]);
     } catch {
       // Fallback without sort query in case index on $createdAt does not exist
       res = await databases.listDocuments(config.databaseId, collId, [
-        Query.limit(100),
+        Query.limit(20),
       ]);
     }
 
@@ -498,13 +528,13 @@ export const fetchProductsFromAppwrite = async (): Promise<Product[] | null> => 
     let res;
     try {
       res = await databases.listDocuments(config.databaseId, collId, [
-        Query.limit(100),
+        Query.limit(20),
         Query.orderDesc('$createdAt'),
       ]);
     } catch {
       // Fallback without sort query in case index on $createdAt does not exist
       res = await databases.listDocuments(config.databaseId, collId, [
-        Query.limit(100),
+        Query.limit(20),
       ]);
     }
 
@@ -916,13 +946,424 @@ export const createAnalyticsEventInAppwrite = async (event: AnalyticsEvent): Pro
 };
 
 /**
- * Setup Realtime Subscriptions
- * Subscribes to changes on stores and products in Appwrite so all connected devices update live!
+ * Premium Requests & Subscriptions Cloud Operations (HYBRID: Realtime, No Cache, Instant Approval)
+ */
+export const fetchPremiumRequestsFromAppwrite = async (): Promise<PremiumRequest[] | null> => {
+  const config = getStoredAppwriteConfig();
+  const { databases } = getAppwrite();
+  if (!databases || !config.projectId || !config.databaseId) return null;
+
+  try {
+    const collId = config.premiumRequestsCollectionId || 'premium_requests';
+    let res;
+    try {
+      res = await databases.listDocuments(config.databaseId, collId, [
+        Query.orderDesc('$createdAt'),
+        Query.limit(50),
+      ]);
+    } catch {
+      res = await databases.listDocuments(config.databaseId, collId, [Query.limit(50)]);
+    }
+
+    return res.documents.map((doc: any) => ({
+      id: doc.id || doc.$id,
+      storeId: doc.storeId || doc.storeid || '',
+      storeName: doc.storeName || doc.storename || '',
+      ownerId: doc.ownerId || doc.ownerid || '',
+      ownerEmail: doc.ownerEmail || doc.owneremail || '',
+      type: doc.type || 'premium',
+      amount: Number(doc.amount) || 0,
+      status: doc.status || 'pending',
+      createdAt: doc.createdAt || doc.createdat || doc.$createdAt || new Date().toISOString(),
+      approvedAt: doc.approvedAt || doc.approvedat,
+      notes: doc.notes || '',
+    })) as PremiumRequest[];
+  } catch (err: any) {
+    console.warn('Appwrite fetchPremiumRequestsFromAppwrite error:', err?.message || err);
+    return null;
+  }
+};
+
+export const createPremiumRequestInAppwrite = async (
+  request: PremiumRequest
+): Promise<{ success: boolean; docId?: string; error?: string }> => {
+  const config = getStoredAppwriteConfig();
+  const { databases } = getAppwrite();
+  if (!databases || !config.projectId || !config.databaseId) {
+    return { success: false, error: 'Appwrite not configured' };
+  }
+
+  const collId = config.premiumRequestsCollectionId || 'premium_requests';
+  const initialPayload: Record<string, any> = {
+    storeId: request.storeId,
+    storeid: request.storeId,
+    storeName: request.storeName,
+    storename: request.storeName,
+    ownerId: request.ownerId,
+    ownerid: request.ownerId,
+    ownerEmail: request.ownerEmail,
+    owneremail: request.ownerEmail,
+    type: request.type,
+    amount: Number(request.amount) || 0,
+    status: request.status || 'pending',
+    createdAt: request.createdAt || new Date().toISOString(),
+    createdat: request.createdAt || new Date().toISOString(),
+    notes: request.notes || '',
+  };
+
+  const result = await resilientCreateDocument(config.databaseId, collId, request.id, initialPayload);
+  return {
+    success: result.success,
+    docId: result.doc?.$id,
+    error: result.error,
+  };
+};
+
+export const updatePremiumRequestInAppwrite = async (
+  requestId: string,
+  updates: Partial<PremiumRequest>
+): Promise<void> => {
+  const config = getStoredAppwriteConfig();
+  const { databases } = getAppwrite();
+  if (!databases || !config.projectId || !config.databaseId) return;
+
+  try {
+    const collId = config.premiumRequestsCollectionId || 'premium_requests';
+    const safeDocId = requestId.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 36);
+    await databases.updateDocument(config.databaseId, collId, safeDocId, cleanPayload(updates));
+  } catch (err) {
+    console.warn('Failed to update premium request in Appwrite:', err);
+  }
+};
+
+export const fetchSubscriptionsFromAppwrite = async (): Promise<Subscription[] | null> => {
+  const config = getStoredAppwriteConfig();
+  const { databases } = getAppwrite();
+  if (!databases || !config.projectId || !config.databaseId) return null;
+
+  try {
+    const collId = config.subscriptionsCollectionId || 'subscriptions';
+    let res;
+    try {
+      res = await databases.listDocuments(config.databaseId, collId, [
+        Query.orderDesc('$createdAt'),
+        Query.limit(50),
+      ]);
+    } catch {
+      res = await databases.listDocuments(config.databaseId, collId, [Query.limit(50)]);
+    }
+
+    return res.documents.map((doc: any) => ({
+      id: doc.id || doc.$id,
+      storeId: doc.storeId || doc.storeid || '',
+      storeName: doc.storeName || doc.storename || '',
+      ownerId: doc.ownerId || doc.ownerid || '',
+      plan: doc.plan || 'premium',
+      status: doc.status || 'active',
+      amount: Number(doc.amount) || 0,
+      startDate: doc.startDate || doc.startdate || doc.$createdAt || new Date().toISOString(),
+      endDate: doc.endDate || doc.enddate || '',
+    })) as Subscription[];
+  } catch (err: any) {
+    console.warn('Appwrite fetchSubscriptionsFromAppwrite error:', err?.message || err);
+    return null;
+  }
+};
+
+export const createOrUpdateSubscriptionInAppwrite = async (
+  subscription: Subscription
+): Promise<{ success: boolean; docId?: string; error?: string }> => {
+  const config = getStoredAppwriteConfig();
+  const { databases } = getAppwrite();
+  if (!databases || !config.projectId || !config.databaseId) {
+    return { success: false, error: 'Appwrite not configured' };
+  }
+
+  const collId = config.subscriptionsCollectionId || 'subscriptions';
+  const safeDocId = (subscription.id || ID.unique()).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 36);
+
+  const initialPayload: Record<string, any> = {
+    storeId: subscription.storeId,
+    storeid: subscription.storeId,
+    storeName: subscription.storeName,
+    storename: subscription.storeName,
+    ownerId: subscription.ownerId,
+    ownerid: subscription.ownerId,
+    plan: subscription.plan,
+    status: subscription.status || 'active',
+    amount: Number(subscription.amount) || 0,
+    startDate: subscription.startDate || new Date().toISOString(),
+    startdate: subscription.startDate || new Date().toISOString(),
+    endDate: subscription.endDate || '',
+    enddate: subscription.endDate || '',
+  };
+
+  try {
+    // Try updating existing subscription first
+    await databases.updateDocument(config.databaseId, collId, safeDocId, cleanPayload(initialPayload));
+    return { success: true, docId: safeDocId };
+  } catch {
+    // Otherwise create new document
+    const result = await resilientCreateDocument(config.databaseId, collId, safeDocId, initialPayload);
+    return { success: result.success, docId: result.doc?.$id, error: result.error };
+  }
+};
+
+/**
+ * Notifications Cloud Operations (Appwrite Realtime & Badge Count)
+ */
+export const fetchNotificationsFromAppwrite = async (
+  userId?: string
+): Promise<AppwriteNotification[] | null> => {
+  const config = getStoredAppwriteConfig();
+  const { databases } = getAppwrite();
+  if (!databases || !config.projectId || !config.databaseId) return null;
+
+  try {
+    const collId = config.notificationsCollectionId || 'notifications';
+    let res;
+    try {
+      res = await databases.listDocuments(config.databaseId, collId, [
+        Query.orderDesc('$createdAt'),
+        Query.limit(50),
+      ]);
+    } catch {
+      res = await databases.listDocuments(config.databaseId, collId, [Query.limit(50)]);
+    }
+
+    const docs = res.documents.map((doc: any) => ({
+      id: doc.id || doc.$id,
+      title: doc.title || 'Marketplace Notification',
+      message: doc.message || '',
+      type: doc.type || 'system',
+      userId: doc.userId || doc.userid || 'all',
+      storeId: doc.storeId || doc.storeid,
+      productId: doc.productId || doc.productid,
+      isRead: Boolean(doc.isRead ?? doc.isread),
+      createdAt: doc.createdAt || doc.createdat || doc.$createdAt || new Date().toISOString(),
+      badgeCount: Number(doc.badgeCount ?? doc.badgecount ?? 1),
+    })) as AppwriteNotification[];
+
+    if (userId) {
+      return docs.filter((n) => !n.userId || n.userId === 'all' || n.userId === userId);
+    }
+    return docs;
+  } catch (err: any) {
+    console.warn('Appwrite fetchNotificationsFromAppwrite error:', err?.message || err);
+    return null;
+  }
+};
+
+export const createNotificationInAppwrite = async (
+  notification: AppwriteNotification
+): Promise<{ success: boolean; docId?: string; error?: string }> => {
+  const config = getStoredAppwriteConfig();
+  const { databases } = getAppwrite();
+  if (!databases || !config.projectId || !config.databaseId) {
+    return { success: false, error: 'Appwrite not configured' };
+  }
+
+  const collId = config.notificationsCollectionId || 'notifications';
+  const initialPayload: Record<string, any> = {
+    title: notification.title,
+    message: notification.message,
+    type: notification.type,
+    userId: notification.userId || 'all',
+    userid: notification.userId || 'all',
+    storeId: notification.storeId || '',
+    storeid: notification.storeId || '',
+    productId: notification.productId || '',
+    productid: notification.productId || '',
+    isRead: Boolean(notification.isRead),
+    isread: Boolean(notification.isRead),
+    createdAt: notification.createdAt || new Date().toISOString(),
+    createdat: notification.createdAt || new Date().toISOString(),
+    badgeCount: notification.badgeCount || 1,
+    badgecount: notification.badgeCount || 1,
+  };
+
+  const result = await resilientCreateDocument(config.databaseId, collId, notification.id, initialPayload);
+  return {
+    success: result.success,
+    docId: result.doc?.$id,
+    error: result.error,
+  };
+};
+
+export const updateNotificationInAppwrite = async (
+  id: string,
+  updates: Partial<AppwriteNotification>
+): Promise<void> => {
+  const config = getStoredAppwriteConfig();
+  const { databases } = getAppwrite();
+  if (!databases || !config.projectId || !config.databaseId) return;
+
+  try {
+    const collId = config.notificationsCollectionId || 'notifications';
+    const safeDocId = id.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 36);
+    await databases.updateDocument(config.databaseId, collId, safeDocId, cleanPayload(updates));
+  } catch (err) {
+    console.warn('Failed to update notification in Appwrite:', err);
+  }
+};
+
+export const markAllNotificationsAsReadInAppwrite = async (
+  userId?: string
+): Promise<void> => {
+  const config = getStoredAppwriteConfig();
+  const { databases } = getAppwrite();
+  if (!databases || !config.projectId || !config.databaseId) return;
+
+  try {
+    const unread = await fetchNotificationsFromAppwrite(userId);
+    if (!unread) return;
+
+    for (const item of unread.filter((n) => !n.isRead)) {
+      await updateNotificationInAppwrite(item.id, { isRead: true });
+    }
+  } catch (err) {
+    console.warn('Failed to mark all notifications as read in Appwrite:', err);
+  }
+};
+
+/**
+ * Appwrite Push Notifications & Messaging (FCM Targets & Topics)
+ */
+export const registerPushTargetInAppwrite = async (
+  fcmToken: string,
+  userId?: string
+): Promise<{ success: boolean; targetId?: string; error?: string }> => {
+  const config = getStoredAppwriteConfig();
+  const { account } = getAppwrite();
+  if (!config.projectId) {
+    return { success: false, error: 'Appwrite not configured' };
+  }
+
+  const targetId = 'target_' + (userId || 'user_' + Date.now()).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 28);
+
+  try {
+    if (account) {
+      try {
+        const target = await account.createPushTarget(
+          targetId,
+          fcmToken,
+          config.fcmProviderId || undefined
+        );
+        console.log('Appwrite Push Target registered successfully:', target);
+
+        // Save targetId to localStorage
+        localStorage.setItem('hustlehub_push_target_id', target.$id || targetId);
+        localStorage.setItem('hustlehub_fcm_token', fcmToken);
+
+        return { success: true, targetId: target.$id || targetId };
+      } catch (accErr: any) {
+        console.warn('Appwrite account.createPushTarget notice (proceeding with client push):', accErr?.message || accErr);
+        // If target already exists or provider not yet connected in Appwrite Console, we save identifier locally
+        localStorage.setItem('hustlehub_push_target_id', targetId);
+        localStorage.setItem('hustlehub_fcm_token', fcmToken);
+        return { success: true, targetId };
+      }
+    }
+    return { success: true, targetId };
+  } catch (err: any) {
+    console.warn('Push target registration error:', err?.message || err);
+    return { success: false, error: err?.message || 'Failed to register push target' };
+  }
+};
+
+export const subscribeUserToPushTopic = async (
+  topicId: string,
+  targetId: string
+): Promise<{ success: boolean; error?: string }> => {
+  const config = getStoredAppwriteConfig();
+  const { messaging } = getAppwrite();
+  if (!messaging || !config.projectId) {
+    return { success: false, error: 'Messaging not initialized' };
+  }
+
+  try {
+    const subscriberId = ID.unique();
+    await messaging.createSubscriber(topicId, subscriberId, targetId);
+    console.log(`Subscribed target ${targetId} to topic: ${topicId}`);
+    return { success: true };
+  } catch (err: any) {
+    console.warn(`Appwrite subscribe to topic "${topicId}" notice:`, err?.message || err);
+    return { success: false, error: err?.message || 'Failed to subscribe to topic' };
+  }
+};
+
+export const sendPushNotificationViaFunction = async (payload: {
+  topic: string;
+  title: string;
+  body: string;
+  badgeCount?: number;
+  data?: any;
+}): Promise<{ success: boolean; error?: string }> => {
+  const config = getStoredAppwriteConfig();
+  const { functions } = getAppwrite();
+
+  // 1. Dispatch in-browser Web Notification if permission granted and page active/installed
+  try {
+    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+      try {
+        if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+          navigator.serviceWorker.ready.then((reg) => {
+            reg.showNotification(payload.title, {
+              body: payload.body,
+              icon: '/pwa-192x192.png',
+              badge: '/icon.svg',
+              tag: payload.topic,
+              data: payload.data,
+            });
+          });
+        } else {
+          new Notification(payload.title, {
+            body: payload.body,
+            icon: '/pwa-192x192.png',
+            tag: payload.topic,
+          });
+        }
+      } catch (browserNotifErr) {
+        console.warn('Browser Notification execution notice:', browserNotifErr);
+      }
+    }
+  } catch {}
+
+  // 2. Trigger Appwrite Cloud Function if configured
+  if (functions && config.projectId && config.cloudFunctionId) {
+    try {
+      const exec = await functions.createExecution(
+        config.cloudFunctionId,
+        JSON.stringify({
+          topic: payload.topic,
+          title: payload.title,
+          body: payload.body,
+          badgeCount: payload.badgeCount ?? 1,
+          data: payload.data || {},
+          timestamp: new Date().toISOString(),
+        }),
+        true // async execution
+      );
+      console.log('Appwrite push notification Cloud Function executed:', exec.$id);
+      return { success: true };
+    } catch (funcErr: any) {
+      console.warn('Appwrite Cloud Function push notice:', funcErr?.message || funcErr);
+    }
+  }
+
+  return { success: true };
+};
+
+/**
+ * Setup Realtime Subscriptions (HYBRID: stores, products, reports, premium_requests, subscriptions, notifications)
  */
 export const subscribeToMarketplaceRealtime = (callbacks: {
-  onStoreChange?: (payload?: any) => void;
-  onProductChange?: (payload?: any) => void;
-  onReportChange?: (payload?: any) => void;
+  onStoreChange?: (payload?: any, eventType?: string) => void;
+  onProductChange?: (payload?: any, eventType?: string) => void;
+  onReportChange?: (payload?: any, eventType?: string) => void;
+  onPremiumRequestChange?: (payload?: any, eventType?: string) => void;
+  onSubscriptionChange?: (payload?: any, eventType?: string) => void;
+  onNotificationChange?: (payload?: any, eventType?: string) => void;
 }): (() => void) => {
   const config = getStoredAppwriteConfig();
   const { client } = getAppwrite();
@@ -934,22 +1375,39 @@ export const subscribeToMarketplaceRealtime = (callbacks: {
     const storesColl = config.storesCollectionId || 'stores';
     const productsColl = config.productsCollectionId || 'products';
     const reportsColl = config.reportsCollectionId || 'reports';
+    const premColl = config.premiumRequestsCollectionId || 'premium_requests';
+    const subsColl = config.subscriptionsCollectionId || 'subscriptions';
+    const notifsColl = config.notificationsCollectionId || 'notifications';
 
     const storesChannel = `databases.${config.databaseId}.collections.${storesColl}.documents`;
     const productsChannel = `databases.${config.databaseId}.collections.${productsColl}.documents`;
     const reportsChannel = `databases.${config.databaseId}.collections.${reportsColl}.documents`;
+    const premChannel = `databases.${config.databaseId}.collections.${premColl}.documents`;
+    const subsChannel = `databases.${config.databaseId}.collections.${subsColl}.documents`;
+    const notifsChannel = `databases.${config.databaseId}.collections.${notifsColl}.documents`;
 
     const unsubscribe = client.subscribe(
-      [storesChannel, productsChannel, reportsChannel],
+      [storesChannel, productsChannel, reportsChannel, premChannel, subsChannel, notifsChannel],
       (response) => {
         const events = response.events || [];
+        const isCreate = events.some((e: string) => e.includes('.create'));
+        const isUpdate = events.some((e: string) => e.includes('.update'));
+        const isDelete = events.some((e: string) => e.includes('.delete'));
+        const eventType = isCreate ? 'create' : isUpdate ? 'update' : isDelete ? 'delete' : 'change';
+
         const isStore = events.some((e: string) => e.includes(storesColl) || e.includes('stores'));
         const isProduct = events.some((e: string) => e.includes(productsColl) || e.includes('products'));
         const isReport = events.some((e: string) => e.includes(reportsColl) || e.includes('reports'));
+        const isPremiumReq = events.some((e: string) => e.includes(premColl) || e.includes('premium_requests'));
+        const isSubscription = events.some((e: string) => e.includes(subsColl) || e.includes('subscriptions'));
+        const isNotification = events.some((e: string) => e.includes(notifsColl) || e.includes('notifications'));
 
-        if (isStore && callbacks.onStoreChange) callbacks.onStoreChange(response.payload);
-        if (isProduct && callbacks.onProductChange) callbacks.onProductChange(response.payload);
-        if (isReport && callbacks.onReportChange) callbacks.onReportChange(response.payload);
+        if (isStore && callbacks.onStoreChange) callbacks.onStoreChange(response.payload, eventType);
+        if (isProduct && callbacks.onProductChange) callbacks.onProductChange(response.payload, eventType);
+        if (isReport && callbacks.onReportChange) callbacks.onReportChange(response.payload, eventType);
+        if (isPremiumReq && callbacks.onPremiumRequestChange) callbacks.onPremiumRequestChange(response.payload, eventType);
+        if (isSubscription && callbacks.onSubscriptionChange) callbacks.onSubscriptionChange(response.payload, eventType);
+        if (isNotification && callbacks.onNotificationChange) callbacks.onNotificationChange(response.payload, eventType);
       }
     );
 

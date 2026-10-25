@@ -114,6 +114,45 @@ export interface AnalyticsEvent {
   amount?: number; // for paid promotions
 }
 
+export interface PremiumRequest {
+  id: string;
+  storeId: string;
+  storeName: string;
+  ownerId: string;
+  ownerEmail: string;
+  type: 'featured' | 'premium';
+  amount: number;
+  status: 'pending' | 'approved' | 'rejected';
+  createdAt: string;
+  approvedAt?: string;
+  notes?: string;
+}
+
+export interface Subscription {
+  id: string;
+  storeId: string;
+  storeName: string;
+  ownerId: string;
+  plan: 'featured' | 'premium';
+  status: 'active' | 'cancelled' | 'expired';
+  amount: number;
+  startDate: string;
+  endDate?: string;
+}
+
+export interface AppwriteNotification {
+  id: string;
+  title: string;
+  message: string;
+  type: 'new_product' | 'premium_approved' | 'featured_approved' | 'system';
+  userId?: string; // target user ID or 'all'
+  storeId?: string;
+  productId?: string;
+  isRead: boolean;
+  createdAt: string;
+  badgeCount?: number;
+}
+
 export interface AppwriteConfig {
   endpoint: string;
   projectId: string;
@@ -123,6 +162,13 @@ export interface AppwriteConfig {
   productsCollectionId?: string;
   reportsCollectionId?: string;
   eventsCollectionId?: string;
+  premiumRequestsCollectionId?: string;
+  subscriptionsCollectionId?: string;
+  notificationsCollectionId?: string;
+  cloudFunctionId?: string;
+  fcmProviderId?: string;
+  fcmToken?: string;
+  pushNotificationsEnabled?: boolean;
   isConfigured: boolean;
 }
 

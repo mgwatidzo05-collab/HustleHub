@@ -15,6 +15,7 @@ import { CustomerAuthModal } from './components/CustomerAuthModal';
 import { ReportModal } from './components/ReportModal';
 import { MobileBottomNav } from './components/MobileBottomNav';
 import { TermsModal } from './components/TermsModal';
+import { NotificationCenterModal } from './components/NotificationCenterModal';
 import { Product, Store, StoreCategory } from './types';
 import {
   ShoppingBag,
@@ -62,6 +63,8 @@ const MarketplaceApp: React.FC = () => {
     isTermsOpen,
     openTerms,
     closeTerms,
+    unreadNewProductsCount,
+    resetNewProductsBadge,
   } = useMarketplace();
 
   // Helpers to read initial navigation and modal state from URL or localStorage
@@ -120,6 +123,7 @@ const MarketplaceApp: React.FC = () => {
   const [isStoreLoginOpen, setIsStoreLoginOpenState] = useState(() => activeModal === 'login');
   const [isStoreDashboardOpen, setIsStoreDashboardOpenState] = useState(() => activeModal === 'dashboard');
   const [isAdminOpen, setIsAdminOpenState] = useState(() => activeModal === 'admin');
+  const [isNotificationsOpen, setIsNotificationsOpenState] = useState(() => activeModal === 'notifications');
 
   // Modal setters that sync with URL and storage
   const setIsAuthOpen = (open: boolean) => {
@@ -145,6 +149,11 @@ const MarketplaceApp: React.FC = () => {
   const setIsAdminOpen = (open: boolean) => {
     setIsAdminOpenState(open);
     syncUrlAndStorage('modal', open ? 'admin' : null);
+  };
+
+  const setIsNotificationsOpen = (open: boolean) => {
+    setIsNotificationsOpenState(open);
+    syncUrlAndStorage('modal', open ? 'notifications' : null);
   };
 
   const setSelectedProduct = (prod: Product | null) => {
@@ -289,6 +298,7 @@ const MarketplaceApp: React.FC = () => {
         onOpenStoreLogin={() => setIsStoreLoginOpen(true)}
         onOpenStoreDashboard={() => setIsStoreDashboardOpen(true)}
         onOpenAdmin={() => setIsAdminOpen(true)}
+        onOpenNotifications={() => setIsNotificationsOpen(true)}
         activeTab={activeTab}
         setActiveTab={(t) => setActiveTab(t)}
       />
@@ -301,6 +311,46 @@ const MarketplaceApp: React.FC = () => {
         {/* ========================================================================= */}
         {activeTab === 'marketplace' && (
           <div className="space-y-6 animate-in fade-in duration-150">
+            
+            {/* Realtime Live Products Alert Banner */}
+            {unreadNewProductsCount > 0 && (
+              <div className="bg-gradient-to-r from-orange-600 via-amber-600 to-orange-500 text-white p-3 sm:p-4 rounded-2xl shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 border border-orange-400/40">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-white/20 backdrop-blur flex items-center justify-center shrink-0">
+                    <Sparkles className="w-5 h-5 text-amber-200 animate-spin" />
+                  </div>
+                  <div>
+                    <div className="text-xs sm:text-sm font-bold flex items-center gap-2">
+                      <span>Appwrite Realtime Feed: {unreadNewProductsCount} new {unreadNewProductsCount === 1 ? 'item' : 'items'} just listed!</span>
+                      <span className="px-1.5 py-0.5 rounded-full bg-white/20 text-[10px] uppercase tracking-wider font-extrabold">Live</span>
+                    </div>
+                    <p className="text-[11px] text-orange-100 mt-0.5">
+                      New products appear here instantly without refreshing via Appwrite Realtime websockets.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+                  <button
+                    onClick={() => {
+                      resetNewProductsBadge();
+                      const el = document.getElementById('marketplace-catalog');
+                      el?.scrollIntoView({ behavior: 'smooth' });
+                    }}
+                    className="px-3.5 py-1.5 rounded-xl bg-white text-orange-700 hover:bg-orange-50 font-bold text-xs shadow-md transition-all active:scale-95 cursor-pointer"
+                  >
+                    View Catalog
+                  </button>
+                  <button
+                    onClick={resetNewProductsBadge}
+                    className="p-1.5 rounded-xl bg-black/20 hover:bg-black/30 text-white/80 hover:text-white transition-colors cursor-pointer"
+                    title="Dismiss"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+            )}
             
             {/* Hero Section */}
             <HeroSection
@@ -801,6 +851,7 @@ const MarketplaceApp: React.FC = () => {
         onOpenStoreDashboard={() => setIsStoreDashboardOpen(true)}
         onOpenAdmin={() => setIsAdminOpen(true)}
         onOpenAuth={() => setIsAuthOpen(true)}
+        onOpenNotifications={() => setIsNotificationsOpen(true)}
       />
 
       {/* MODALS WITH SCROLL LOCK */}
@@ -902,6 +953,14 @@ const MarketplaceApp: React.FC = () => {
           targetTitle={reportTarget.targetTitle}
         />
       )}
+
+      {/* Real-time Notification Center Modal */}
+      <NotificationCenterModal
+        isOpen={isNotificationsOpen}
+        onClose={() => setIsNotificationsOpen(false)}
+        onSelectProduct={(p) => setSelectedProduct(p)}
+        onSelectStore={(st) => setSelectedStore(st)}
+      />
 
       {/* Global Terms and Conditions Modal */}
       <TermsModal

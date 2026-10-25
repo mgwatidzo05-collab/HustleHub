@@ -76,6 +76,10 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
     testAppwrite,
     isAppwriteLive,
     openTerms,
+    premiumRequests,
+    subscriptions,
+    instantApprovePremiumRequest,
+    instantRejectPremiumRequest,
   } = useMarketplace();
 
   // Authentication State
@@ -88,6 +92,7 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
   const [expandedStoreId, setExpandedStoreId] = useState<string | null>(null);
   const [verificationSearch, setVerificationSearch] = useState('');
   const [copiedSchema, setCopiedSchema] = useState(false);
+  const [approvingRequestId, setApprovingRequestId] = useState<string | null>(null);
 
   // Appwrite Config Form State
   const [appwriteEndpoint, setAppwriteEndpoint] = useState(appwriteConfig.endpoint);
@@ -98,6 +103,11 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
   const [appwriteProductsCollId, setAppwriteProductsCollId] = useState(appwriteConfig.productsCollectionId || 'products');
   const [appwriteReportsCollId, setAppwriteReportsCollId] = useState(appwriteConfig.reportsCollectionId || 'reports');
   const [appwriteEventsCollId, setAppwriteEventsCollId] = useState(appwriteConfig.eventsCollectionId || 'analytics_events');
+  const [appwritePremiumCollId, setAppwritePremiumCollId] = useState(appwriteConfig.premiumRequestsCollectionId || 'premium_requests');
+  const [appwriteSubscriptionsCollId, setAppwriteSubscriptionsCollId] = useState(appwriteConfig.subscriptionsCollectionId || 'subscriptions');
+  const [appwriteNotificationsCollId, setAppwriteNotificationsCollId] = useState(appwriteConfig.notificationsCollectionId || 'notifications');
+  const [appwriteCloudFunctionId, setAppwriteCloudFunctionId] = useState(appwriteConfig.cloudFunctionId || 'send_push_notification');
+  const [appwriteFcmProviderId, setAppwriteFcmProviderId] = useState(appwriteConfig.fcmProviderId || 'fcm_provider');
   const [showAdvancedCollections, setShowAdvancedCollections] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isTesting, setIsTesting] = useState(false);
@@ -131,6 +141,11 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
           productsCollectionId: appwriteProductsCollId,
           reportsCollectionId: appwriteReportsCollId,
           eventsCollectionId: appwriteEventsCollId,
+          premiumRequestsCollectionId: appwritePremiumCollId,
+          subscriptionsCollectionId: appwriteSubscriptionsCollId,
+          notificationsCollectionId: appwriteNotificationsCollId,
+          cloudFunctionId: appwriteCloudFunctionId,
+          fcmProviderId: appwriteFcmProviderId,
           isConfigured: true,
         });
       }
@@ -1175,20 +1190,160 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
             {activeTab === 'promotions' && (
               <div className="space-y-6">
                 <div>
-                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                    <Sparkles className="w-4 h-4 text-amber-400" />
-                    <span>Store Promotion & Premium Tier Approvals</span>
-                  </h3>
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-amber-400" />
+                      <span>Store Promotion & Premium Tier Approvals</span>
+                    </h3>
+                    <div className="flex items-center gap-2 text-[11px] text-emerald-400 bg-emerald-950/60 border border-emerald-800/50 px-2.5 py-1 rounded-full w-fit">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                      <span>Appwrite Realtime: Zero-Cache Instant Stream Active</span>
+                    </div>
+                  </div>
                   <p className="text-xs text-slate-400 mt-1">
-                    Stores can request promotions in their dashboard, but only admins can approve and activate them here.
+                    Stores request promotions or photo upgrades. Approve instantly below to update records and dispatch FCM push alerts via Appwrite Cloud Functions.
                   </p>
+                </div>
+
+                {/* Section 0: Appwrite Realtime premium_requests (Zero Cache, Instant Approval) */}
+                <div className="p-4 rounded-xl bg-slate-950/90 border border-amber-500/40 shadow-xl space-y-3.5">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+                    <div>
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-amber-400 flex items-center gap-2">
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>Live Premium Requests (Realtime table: premium_requests)</span>
+                        <span className="px-1.5 py-0.2 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-bold">
+                          {premiumRequests.filter((r) => r.status === 'pending').length} pending
+                        </span>
+                      </h4>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        Uses no-cache Appwrite Realtime websocket subscription. Instant approval triggers FCM topic push notification!
+                      </p>
+                    </div>
+                  </div>
+
+                  {premiumRequests.filter((r) => r.status === 'pending').length === 0 ? (
+                    <div className="p-4 rounded-xl bg-slate-900/60 border border-dashed border-slate-800 text-center text-xs text-slate-500">
+                      No pending requests in <code className="text-orange-400 font-mono">premium_requests</code> collection. New requests stream here live.
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {premiumRequests
+                        .filter((r) => r.status === 'pending')
+                        .map((req) => (
+                          <div
+                            key={req.id}
+                            className="p-3.5 rounded-xl bg-slate-900 border border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-md"
+                          >
+                            <div className="space-y-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-xs font-bold text-white">{req.storeName}</span>
+                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-bold border border-amber-500/40 uppercase">
+                                  {req.type} tier · ${req.amount}
+                                </span>
+                                {req.notes && (
+                                  <span className="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono">
+                                    {req.notes}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[11px] text-slate-400">
+                                Owner: <strong className="text-slate-300">{req.ownerEmail}</strong> · Requested:{' '}
+                                {new Date(req.createdAt).toLocaleDateString()} at{' '}
+                                {new Date(req.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </p>
+                            </div>
+
+                            <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+                              <button
+                                onClick={async () => {
+                                  await instantRejectPremiumRequest(req.id);
+                                }}
+                                className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-rose-950 text-slate-400 hover:text-rose-300 border border-slate-700 text-xs font-medium transition-colors cursor-pointer"
+                              >
+                                Decline
+                              </button>
+                              <button
+                                onClick={async () => {
+                                  setApprovingRequestId(req.id);
+                                  try {
+                                    await instantApprovePremiumRequest(req.id);
+                                  } finally {
+                                    setApprovingRequestId(null);
+                                  }
+                                }}
+                                disabled={approvingRequestId === req.id}
+                                className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-lg shadow-amber-500/20 disabled:opacity-50 transition-all active:scale-95 cursor-pointer"
+                              >
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                <span>
+                                  {approvingRequestId === req.id
+                                    ? 'Approving & Sending FCM...'
+                                    : '⚡ Instant Approve (Realtime + Push)'}
+                                </span>
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Section 0B: Realtime Active Subscriptions (Table: subscriptions) */}
+                <div className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 space-y-3">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-blue-400 flex items-center gap-1.5">
+                      <CreditCard className="w-3.5 h-3.5" />
+                      <span>Active Subscriptions (Realtime table: subscriptions)</span>
+                      <span className="px-1.5 py-0.2 rounded-full bg-blue-500/20 text-blue-300 text-[10px]">
+                        {subscriptions.filter((s) => s.status === 'active').length} active
+                      </span>
+                    </h4>
+                  </div>
+
+                  {subscriptions.length === 0 ? (
+                    <p className="text-xs text-slate-500 py-3 text-center">
+                      No active subscription documents in <code className="text-blue-400 font-mono">subscriptions</code> collection.
+                    </p>
+                  ) : (
+                    <div className="space-y-2">
+                      {subscriptions.map((sub) => (
+                        <div
+                          key={sub.id}
+                          className="p-3 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-between text-xs gap-3"
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-7 h-7 rounded-lg bg-blue-500/20 text-blue-400 flex items-center justify-center font-bold">
+                              ✓
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-white">{sub.storeName}</span>
+                                <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 text-[10px] font-bold uppercase">
+                                  {sub.plan}
+                                </span>
+                              </div>
+                              <div className="text-[11px] text-slate-400 mt-0.5">
+                                Active from {new Date(sub.startDate).toLocaleDateString()} until {sub.endDate ? new Date(sub.endDate).toLocaleDateString() : 'Ongoing'}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="text-right shrink-0">
+                            <span className="text-xs font-mono font-bold text-emerald-400">${sub.amount}</span>
+                            <div className="text-[10px] text-slate-500 font-medium">Status: {sub.status}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* Section A: Pending Promotion Requests */}
                 <div className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 space-y-3">
                   <div className="flex items-center justify-between border-b border-slate-800 pb-2">
                     <h4 className="text-xs font-bold uppercase tracking-wider text-amber-400 flex items-center gap-1.5">
-                      <span>Pending Upgrade Requests</span>
+                      <span>Store-Level Upgrade Requests</span>
                       <span className="px-1.5 py-0.2 rounded-full bg-amber-500/20 text-amber-300 text-[10px]">
                         {totalPromotionRequests}
                       </span>
@@ -1644,6 +1799,56 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                             className="w-full bg-slate-950 text-xs text-white px-2.5 py-1.5 rounded border border-slate-800 font-mono"
                           />
                         </div>
+                        <div>
+                          <label className="block text-[11px] text-slate-400 mb-1">Premium Requests Collection ID (Realtime)</label>
+                          <input
+                            type="text"
+                            value={appwritePremiumCollId}
+                            onChange={(e) => setAppwritePremiumCollId(e.target.value)}
+                            placeholder="premium_requests"
+                            className="w-full bg-slate-950 text-xs text-white px-2.5 py-1.5 rounded border border-slate-800 font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] text-slate-400 mb-1">Subscriptions Collection ID (Realtime)</label>
+                          <input
+                            type="text"
+                            value={appwriteSubscriptionsCollId}
+                            onChange={(e) => setAppwriteSubscriptionsCollId(e.target.value)}
+                            placeholder="subscriptions"
+                            className="w-full bg-slate-950 text-xs text-white px-2.5 py-1.5 rounded border border-slate-800 font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] text-slate-400 mb-1">Notifications Collection ID (Realtime)</label>
+                          <input
+                            type="text"
+                            value={appwriteNotificationsCollId}
+                            onChange={(e) => setAppwriteNotificationsCollId(e.target.value)}
+                            placeholder="notifications"
+                            className="w-full bg-slate-950 text-xs text-white px-2.5 py-1.5 rounded border border-slate-800 font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] text-slate-400 mb-1">Push Cloud Function ID (FCM Badge Count)</label>
+                          <input
+                            type="text"
+                            value={appwriteCloudFunctionId}
+                            onChange={(e) => setAppwriteCloudFunctionId(e.target.value)}
+                            placeholder="send_push_notification"
+                            className="w-full bg-slate-950 text-xs text-white px-2.5 py-1.5 rounded border border-slate-800 font-mono"
+                          />
+                        </div>
+                        <div className="sm:col-span-2">
+                          <label className="block text-[11px] text-slate-400 mb-1">Appwrite Messaging FCM Provider ID</label>
+                          <input
+                            type="text"
+                            value={appwriteFcmProviderId}
+                            onChange={(e) => setAppwriteFcmProviderId(e.target.value)}
+                            placeholder="fcm_provider"
+                            className="w-full bg-slate-950 text-xs text-white px-2.5 py-1.5 rounded border border-slate-800 font-mono"
+                          />
+                        </div>
                       </div>
                     )}
                   </div>
@@ -1836,6 +2041,91 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                           <div className="text-slate-400">timestamp (String, size 50)</div>
                         </div>
                       </div>
+
+                      {/* Table 5: premium_requests (HYBRID Realtime: No cache, instant approval) */}
+                      <div className="p-3.5 rounded-xl bg-slate-900/90 border border-amber-500/40 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-white text-xs flex items-center gap-1.5">
+                            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                            <span>Collection 5: <code className="text-amber-400 bg-black/40 px-1.5 py-0.5 rounded">premium_requests</code></span>
+                          </span>
+                          <span className="text-[10px] text-amber-400/90 font-mono">Realtime: Zero Cache</span>
+                        </div>
+                        <p className="text-slate-300 text-[11px]">
+                          Stores student requests for paid Featured ($2/mo) or Unlimited Photos ($1/mo). Appwrite Realtime stream allows admins to approve instantly without caching.
+                        </p>
+                        <div className="p-2.5 rounded bg-black/40 border border-slate-800 font-mono text-[11px] text-slate-300 space-y-0.5">
+                          <div><strong>Attributes to add:</strong></div>
+                          <div className="text-slate-400">storeId (String, size 100, Required)</div>
+                          <div className="text-slate-400">storeName (String, size 255, Required)</div>
+                          <div className="text-slate-400">ownerId (String, size 100, Optional)</div>
+                          <div className="text-slate-400">ownerName (String, size 255, Required)</div>
+                          <div className="text-slate-400">plan (String, size 50: "featured" | "premium_photos" | "bundle")</div>
+                          <div className="text-slate-400">amount (Float, Required)</div>
+                          <div className="text-slate-400">currency (String, size 10, Default: "$")</div>
+                          <div className="text-slate-400">paymentMethod (String, size 50, Required)</div>
+                          <div className="text-slate-400">referenceCode (String, size 100, Optional)</div>
+                          <div className="text-slate-400">status (String, size 20: "pending" | "approved" | "rejected")</div>
+                          <div className="text-slate-400">createdAt (String, size 100, Required)</div>
+                          <div className="text-slate-400">updatedAt (String, size 100, Optional)</div>
+                        </div>
+                      </div>
+
+                      {/* Table 6: subscriptions (HYBRID Realtime: Active Store Subscriptions) */}
+                      <div className="p-3.5 rounded-xl bg-slate-900/90 border border-blue-500/40 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-white text-xs flex items-center gap-1.5">
+                            <CreditCard className="w-3.5 h-3.5 text-blue-400" />
+                            <span>Collection 6: <code className="text-blue-400 bg-black/40 px-1.5 py-0.5 rounded">subscriptions</code></span>
+                          </span>
+                          <span className="text-[10px] text-blue-400/90 font-mono">Realtime: Live Stream</span>
+                        </div>
+                        <p className="text-slate-300 text-[11px]">
+                          Stores active subscription periods, granted perks, expiry dates, and pricing records.
+                        </p>
+                        <div className="p-2.5 rounded bg-black/40 border border-slate-800 font-mono text-[11px] text-slate-300 space-y-0.5">
+                          <div><strong>Attributes to add:</strong></div>
+                          <div className="text-slate-400">storeId (String, size 100, Required)</div>
+                          <div className="text-slate-400">storeName (String, size 255, Required)</div>
+                          <div className="text-slate-400">userId (String, size 100, Optional)</div>
+                          <div className="text-slate-400">plan (String, size 50, Required)</div>
+                          <div className="text-slate-400">status (String, size 20: "active" | "expired" | "cancelled")</div>
+                          <div className="text-slate-400">startDate (String, size 100, Required)</div>
+                          <div className="text-slate-400">endDate (String, size 100, Required)</div>
+                          <div className="text-slate-400">autoRenew (Boolean, Default: false)</div>
+                          <div className="text-slate-400">pricePaid (Float, Required)</div>
+                        </div>
+                      </div>
+
+                      {/* Table 7: notifications (HYBRID Realtime: Live User & System Badges) */}
+                      <div className="p-3.5 rounded-xl bg-slate-900/90 border border-rose-500/40 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-white text-xs flex items-center gap-1.5">
+                            <svg className="w-3.5 h-3.5 text-rose-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                            </svg>
+                            <span>Collection 7: <code className="text-rose-400 bg-black/40 px-1.5 py-0.5 rounded">notifications</code></span>
+                          </span>
+                          <span className="text-[10px] text-rose-400/90 font-mono">Realtime: Live Badge Count</span>
+                        </div>
+                        <p className="text-slate-300 text-[11px]">
+                          Stores in-app notifications (new product arrivals, premium approvals, seller inquiry alerts) and powers real-time unread badges.
+                        </p>
+                        <div className="p-2.5 rounded bg-black/40 border border-slate-800 font-mono text-[11px] text-slate-300 space-y-0.5">
+                          <div><strong>Attributes to add:</strong></div>
+                          <div className="text-slate-400">userId (String, size 100, Optional - "all" for broadcast)</div>
+                          <div className="text-slate-400">title (String, size 255, Required)</div>
+                          <div className="text-slate-400">body (String, size 1000, Required)</div>
+                          <div className="text-slate-400">type (String, size 50: "new_product" | "premium_approved" | "whatsapp_click" | "system")</div>
+                          <div className="text-slate-400">topic (String, size 100: "new-products" | "premium-&#123;userId&#125;" | "general")</div>
+                          <div className="text-slate-400">targetUrl (String, size 255, Optional)</div>
+                          <div className="text-slate-400">productId (String, size 100, Optional)</div>
+                          <div className="text-slate-400">storeId (String, size 100, Optional)</div>
+                          <div className="text-slate-400">isRead (Boolean, Default: false)</div>
+                          <div className="text-slate-400">badgeCount (Integer, Default: 1)</div>
+                          <div className="text-slate-400">createdAt (String, size 100, Required)</div>
+                        </div>
+                      </div>
                     </div>
                   </div>
 
@@ -1906,6 +2196,66 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                         <div><strong className="text-white">VITE_APPWRITE_BUCKET_ID</strong> = <span className="text-slate-200">hustlehub_assets</span></div>
                         <div><strong className="text-white">VITE_APPWRITE_STORES_COLLECTION_ID</strong> = <span className="text-slate-200">stores</span></div>
                         <div><strong className="text-white">VITE_APPWRITE_PRODUCTS_COLLECTION_ID</strong> = <span className="text-slate-200">products</span></div>
+                        <div><strong className="text-white">VITE_APPWRITE_PREMIUM_REQUESTS_COLLECTION_ID</strong> = <span className="text-slate-200">premium_requests</span></div>
+                        <div><strong className="text-white">VITE_APPWRITE_SUBSCRIPTIONS_COLLECTION_ID</strong> = <span className="text-slate-200">subscriptions</span></div>
+                        <div><strong className="text-white">VITE_APPWRITE_NOTIFICATIONS_COLLECTION_ID</strong> = <span className="text-slate-200">notifications</span></div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Step 6: Appwrite Push Notifications & Cloud Functions */}
+                  <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800 space-y-3">
+                    <div className="flex items-center gap-2 text-xs font-bold text-orange-400">
+                      <span className="w-5 h-5 rounded-full bg-orange-500/20 text-orange-400 flex items-center justify-center text-[10px]">6</span>
+                      <span>Appwrite Messaging Push Notifications & Cloud Functions</span>
+                    </div>
+                    <div className="pl-7 text-xs text-slate-300 space-y-2.5 leading-relaxed">
+                      <p>
+                        HustleHub uses Appwrite Messaging for background push notifications and topic subscriptions:
+                      </p>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                        <div className="p-3 rounded-lg bg-slate-900 border border-slate-800 space-y-1.5">
+                          <strong className="text-white flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-orange-400" />
+                            <span>1. FCM Push Target Registration</span>
+                          </strong>
+                          <p className="text-slate-400 text-[11px]">
+                            On customer/business login, HustleHub calls <code className="text-orange-400 font-mono">account.createPushTarget(targetId, token, providerId)</code> with the user's FCM token.
+                          </p>
+                        </div>
+
+                        <div className="p-3 rounded-lg bg-slate-900 border border-slate-800 space-y-1.5">
+                          <strong className="text-white flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-blue-400" />
+                            <span>2. Topic Subscriptions</span>
+                          </strong>
+                          <p className="text-slate-400 text-[11px]">
+                            All users are automatically subscribed to topic <code className="text-blue-400 font-mono">new-products</code>. Premium users are subscribed to <code className="text-blue-400 font-mono">premium-&#123;userId&#125;</code>.
+                          </p>
+                        </div>
+
+                        <div className="p-3 rounded-lg bg-slate-900 border border-slate-800 space-y-1.5">
+                          <strong className="text-white flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                            <span>3. Cloud Function Triggers</span>
+                          </strong>
+                          <p className="text-slate-400 text-[11px]">
+                            When a new product is created, Appwrite Function <code className="text-emerald-400 font-mono">send_push_notification</code> broadcasts push notifications with incremented badge count.
+                          </p>
+                        </div>
+
+                        <div className="p-3 rounded-lg bg-slate-900 border border-slate-800 space-y-1.5">
+                          <strong className="text-white flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-amber-400" />
+                            <span>4. Instant Admin Approval Push</span>
+                          </strong>
+                          <p className="text-slate-400 text-[11px]">
+                            When admin approves premium, push is sent directly to the owner's <code className="text-amber-400 font-mono">premium-&#123;userId&#125;</code> topic and creates an in-app alert.
+                          </p>
+                        </div>
+                      </div>
+                      <div className="p-2.5 rounded bg-amber-500/10 border border-amber-500/30 text-amber-300 text-[11px]">
+                        <strong>PWA Permission:</strong> Push notification permissions are requested automatically when the user installs the HustleHub PWA or clicks "Enable Push Alerts" in the Notification Center.
                       </div>
                     </div>
                   </div>
