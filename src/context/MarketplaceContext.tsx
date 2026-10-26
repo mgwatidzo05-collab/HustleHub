@@ -7,9 +7,6 @@ import {
   AnalyticsEvent,
   AppwriteConfig,
   StoreCategory,
-  PremiumRequest,
-  Subscription,
-  AppwriteNotification,
 } from '../types';
 import { INITIAL_STORES, INITIAL_PRODUCTS, INITIAL_REPORTS } from '../data/initialData';
 import {
@@ -30,18 +27,6 @@ import {
   updateReportInAppwrite,
   createAnalyticsEventInAppwrite,
   subscribeToMarketplaceRealtime,
-  fetchPremiumRequestsFromAppwrite,
-  createPremiumRequestInAppwrite,
-  updatePremiumRequestInAppwrite,
-  fetchSubscriptionsFromAppwrite,
-  createOrUpdateSubscriptionInAppwrite,
-  fetchNotificationsFromAppwrite,
-  createNotificationInAppwrite,
-  updateNotificationInAppwrite,
-  markAllNotificationsAsReadInAppwrite,
-  registerPushTargetInAppwrite,
-  subscribeUserToPushTopic,
-  sendPushNotificationViaFunction,
 } from '../lib/appwrite';
 
 interface MarketplaceContextType {
@@ -79,12 +64,6 @@ interface MarketplaceContextType {
   upgradeToFeatured: (storeId: string) => void;
   upgradeToPremiumPhotos: (storeId: string) => void;
 
-  // Premium Requests & Subscriptions (HYBRID: Realtime, No Cache, Instant Approval)
-  premiumRequests: PremiumRequest[];
-  subscriptions: Subscription[];
-  instantApprovePremiumRequest: (requestId: string) => Promise<void>;
-  instantRejectPremiumRequest: (requestId: string) => Promise<void>;
-
   // Products
   products: Product[];
   addProduct: (productData: Omit<Product, 'id' | 'views' | 'whatsappInquiries' | 'createdAt'>) => Promise<{ success: boolean; savedLocally?: boolean; error?: string; product?: Product; appwriteWarning?: string }>;
@@ -92,19 +71,6 @@ interface MarketplaceContextType {
   deleteProduct: (productId: string) => void;
   syncProductToCloud: (productId: string) => Promise<{ success: boolean; error?: string }>;
   syncAllLocalProductsToCloud: () => Promise<{ syncedCount: number; failedCount: number }>;
-
-  // Notifications & Realtime Badge Counts
-  notifications: AppwriteNotification[];
-  unreadNotificationsCount: number;
-  unreadNewProductsCount: number;
-  resetNewProductsBadge: () => void;
-  markNotificationAsRead: (id: string) => void;
-  markAllNotificationsAsRead: () => void;
-
-  // Push Notifications (Appwrite Messaging & PWA)
-  notificationPermission: NotificationPermission | 'unsupported';
-  isPushRegistered: boolean;
-  requestNotificationPermission: () => Promise<boolean>;
 
   // Interaction & WhatsApp Analytics
   trackWhatsAppClick: (storeId: string, productId?: string, customNote?: string) => string;
@@ -147,7 +113,7 @@ interface MarketplaceContextType {
   appwriteConfig: AppwriteConfig;
   updateAppwriteConfig: (config: AppwriteConfig) => void;
   testAppwrite: (endpoint: string, projectId: string) => Promise<{ success: boolean; message: string }>;
-  syncWithAppwrite: () => Promise<void>;
+  syncWithAppwrite: (forceRefresh?: boolean) => Promise<void>;
   isAppwriteLive: boolean;
 }
 
@@ -275,29 +241,6 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     return localStorage.getItem(STORAGE_KEYS.ADMIN) === 'true';
   });
 
-  // HYBRID: premium_requests and subscriptions in-memory state (NO CACHE, direct Realtime)
-  const [premiumRequests, setPremiumRequests] = useState<PremiumRequest[]>([]);
-  const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
-
-  // Notifications & Realtime Live Badge Counts
-  const [notifications, setNotifications] = useState<AppwriteNotification[]>([]);
-  const [unreadNewProductsCount, setUnreadNewProductsCount] = useState<number>(0);
-  const resetNewProductsBadge = useCallback(() => setUnreadNewProductsCount(0), []);
-
-  // Push Notifications state
-  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | 'unsupported'>(() => {
-    if (typeof window !== 'undefined' && 'Notification' in window) {
-      return Notification.permission;
-    }
-    return 'unsupported';
-  });
-  const [isPushRegistered, setIsPushRegistered] = useState<boolean>(() => {
-    if (typeof window !== 'undefined') {
-      return Boolean(localStorage.getItem('hustlehub_push_target_id'));
-    }
-    return false;
-  });
-
   const [appwriteConfig, setAppwriteConfig] = useState<AppwriteConfig>(getStoredAppwriteConfig);
   const [isAppwriteLive, setIsAppwriteLive] = useState<boolean>(false);
 
@@ -310,118 +253,19 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [filterTradesOnly, setFilterTradesOnly] = useState<boolean>(false);
   const [filterFeaturedOnly, setFilterFeaturedOnly] = useState<boolean>(false);
 
-  // Push Token Helper & Registration
-  const getOrGenerateFCMToken = useCallback(async (): Promise<string> => {
-    const existing = localStorage.getItem('hustlehub_fcm_token');
-    if (existing) return existing;
-
-    if (typeof window !== 'undefined' && 'serviceWorker' in navigator && 'PushManager' in window) {
-      try {
-        const reg = await navigator.serviceWorker.ready;
-        let sub = await reg.pushManager.getSubscription();
-        if (!sub) {
-          try {
-            sub = await reg.pushManager.subscribe({
-              userVisibleOnly: true,
-              applicationServerKey: (import.meta.env.VITE_VAPID_PUBLIC_KEY as string) || undefined,
-            });
-          } catch {}
-        }
-        if (sub?.endpoint) {
-          localStorage.setItem('hustlehub_fcm_token', sub.endpoint);
-          return sub.endpoint;
-        }
-      } catch (e) {
-        console.warn('PushManager error:', e);
-      }
-    }
-
-    const generated = 'fcm_' + Math.random().toString(36).slice(2, 12) + '_' + Date.now();
-    localStorage.setItem('hustlehub_fcm_token', generated);
-    return generated;
-  }, []);
-
-  const registerPushOnLogin = useCallback(async (user: User, storeId?: string) => {
-    if (typeof window === 'undefined') return;
-    try {
-      const token = await getOrGenerateFCMToken();
-      const result = await registerPushTargetInAppwrite(token, user.id);
-      if (result.success && result.targetId) {
-        setIsPushRegistered(true);
-        // Subscribe user to topic 'new-products' for all users
-        await subscribeUserToPushTopic('new-products', result.targetId);
-
-        // Subscribe to topic 'premium-{userId}' for premium users
-        const userStore = stores.find(s => s.id === (storeId || user.storeId) || s.ownerId === user.id);
-        if (userStore?.hasPremiumLimit || userStore?.isFeatured) {
-          await subscribeUserToPushTopic(`premium-${user.id}`, result.targetId);
-        }
-      }
-    } catch (err) {
-      console.warn('Failed to register push target on login:', err);
-    }
-  }, [stores, getOrGenerateFCMToken]);
-
-  const requestNotificationPermission = useCallback(async (): Promise<boolean> => {
-    if (typeof window === 'undefined' || !('Notification' in window)) {
-      return false;
-    }
-    try {
-      const perm = await Notification.requestPermission();
-      setNotificationPermission(perm);
-      if (perm === 'granted') {
-        if (currentUser) {
-          await registerPushOnLogin(currentUser, currentUser.storeId);
-        } else {
-          const token = await getOrGenerateFCMToken();
-          const res = await registerPushTargetInAppwrite(token, 'guest_' + Date.now().toString(36));
-          if (res.success && res.targetId) {
-            setIsPushRegistered(true);
-            await subscribeUserToPushTopic('new-products', res.targetId);
-          }
-        }
-        return true;
-      }
-    } catch (err) {
-      console.warn('Notification permission error:', err);
-    }
-    return false;
-  }, [currentUser, registerPushOnLogin, getOrGenerateFCMToken]);
-
-  // Appwrite Cloud Fetch & Real-Time Sync (HYBRID: fetch feed with limit(20), load premium_requests/subscriptions with NO cache)
-  const syncWithAppwrite = useCallback(async () => {
+  // Appwrite Cloud Fetch & Real-Time Sync (with 60s cache and 25-item pagination)
+  const syncWithAppwrite = useCallback(async (forceRefresh = false) => {
     if (!appwriteConfig.projectId || !appwriteConfig.databaseId) {
       setIsAppwriteLive(false);
       return;
     }
 
     try {
-      const [
-        remoteStores,
-        remoteProducts,
-        remoteReports,
-        remotePremiumReqs,
-        remoteSubs,
-        remoteNotifs,
-      ] = await Promise.all([
-        fetchStoresFromAppwrite(),
-        fetchProductsFromAppwrite(),
-        fetchReportsFromAppwrite(),
-        fetchPremiumRequestsFromAppwrite(),
-        fetchSubscriptionsFromAppwrite(),
-        fetchNotificationsFromAppwrite(currentUser?.id),
+      const [remoteStores, remoteProducts, remoteReports] = await Promise.all([
+        fetchStoresFromAppwrite({ limit: 25, offset: 0, forceRefresh }),
+        fetchProductsFromAppwrite({ limit: 25, offset: 0, forceRefresh }),
+        fetchReportsFromAppwrite({ limit: 25, offset: 0, forceRefresh }),
       ]);
-
-      // HYBRID: premium_requests and subscriptions NO CACHE - direct sync from Appwrite
-      if (remotePremiumReqs) {
-        setPremiumRequests(remotePremiumReqs);
-      }
-      if (remoteSubs) {
-        setSubscriptions(remoteSubs);
-      }
-      if (remoteNotifs) {
-        setNotifications(remoteNotifs);
-      }
 
       if (remoteStores && remoteStores.length > 0) {
         const nonDemoRemote = remoteStores.filter(s => s && s.id && !s.id.startsWith('store-demo'));
@@ -431,6 +275,7 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
             const localStore = localMap.get(remoteStore.id);
             if (!localStore) return remoteStore;
 
+            // If the store was marked unverified, preserve the unverified state
             let isVerified = false;
             if (localStore.verificationStatus === 'unverified' && !localStore.isVerified) {
               isVerified = false;
@@ -486,6 +331,7 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       const nonDemoRemoteProducts = (remoteProducts || []).filter(p => p && p.id && !p.id.startsWith('prod-demo'));
       
       setProducts(prev => {
+        // Build store lookup to strictly resolve storeIsVerified
         let currentStores = stores;
         try {
           const raw = localStorage.getItem(STORAGE_KEYS.STORES);
@@ -496,6 +342,7 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         } catch {}
         const storeMap = new Map(currentStores.map(s => [s.id, s]));
 
+        // Start with remote products from Appwrite, enforcing store's true verification state
         const merged = nonDemoRemoteProducts.map(rp => {
           const parent = storeMap.get(rp.storeId);
           return {
@@ -504,6 +351,7 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
           };
         });
 
+        // Retain local products that aren't in Appwrite yet so user doesn't lose data
         for (const localP of prev) {
           if (localP && localP.id && !localP.id.startsWith('prod-demo')) {
             const alreadyInRemote = merged.some(
@@ -565,7 +413,7 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       console.warn('Appwrite sync failed, continuing with cached/local data:', err);
       setIsAppwriteLive(false);
     }
-  }, [appwriteConfig, currentUser?.id, stores]);
+  }, [appwriteConfig]);
 
   // Initial load and Realtime Database Subscription
   useEffect(() => {
@@ -575,133 +423,75 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     }
 
     let isSubscribed = true;
-    syncWithAppwrite();
+    syncWithAppwrite(false);
 
-    // Subscribe to Appwrite Realtime events
+    // Subscribe to Appwrite Realtime events: Apply payload directly with 0 extra reads!
     const unsubscribe = subscribeToMarketplaceRealtime({
-      onStoreChange: async (payload) => {
-        if (!isSubscribed) return;
-        if (payload) {
-          const freshId = payload.id || payload.$id;
-          if (freshId) {
-            setStores(prev => {
-              const idx = prev.findIndex(s => s.id === freshId);
-              if (idx >= 0) {
-                const copy = [...prev];
-                copy[idx] = { ...copy[idx], ...payload, id: freshId };
-                return copy;
-              } else {
-                return [{ ...payload, id: freshId } as Store, ...prev];
-              }
-            });
-          }
+      onStoreChange: (payload, events = []) => {
+        if (!isSubscribed || !payload) return;
+        const freshId = payload.id || payload.$id;
+        if (!freshId) return;
+
+        const isDelete = events.some((e: string) => e.includes('.delete'));
+        if (isDelete) {
+          setStores(prev => prev.filter(s => s.id !== freshId && (s as any).$id !== freshId));
+          return;
         }
-        const freshStores = await fetchStoresFromAppwrite();
-        if (freshStores && freshStores.length > 0 && isSubscribed) {
-          setStores(freshStores);
-        }
-      },
-      onProductChange: async (payload, eventType) => {
-        if (!isSubscribed) return;
-        if (payload) {
-          const freshId = payload.id || payload.$id;
-          if (freshId) {
-            setProducts(prev => {
-              const idx = prev.findIndex(p => p.id === freshId);
-              if (idx >= 0) {
-                const copy = [...prev];
-                copy[idx] = { ...copy[idx], ...payload, id: freshId };
-                return copy;
-              } else {
-                // New product row from Realtime: update UI instantly + increment badge count!
-                setUnreadNewProductsCount(c => c + 1);
-                return [{ ...payload, id: freshId, isSyncedToCloud: true } as Product, ...prev];
-              }
-            });
-          }
-        }
-        const freshProducts = await fetchProductsFromAppwrite();
-        if (freshProducts && freshProducts.length > 0 && isSubscribed) {
-          setProducts(prev => {
-            const map = new Map<string, Product>();
-            freshProducts.forEach(p => map.set(p.id, p));
-            prev.forEach(p => { if (!map.has(p.id)) map.set(p.id, p); });
-            return Array.from(map.values());
-          });
-        }
-      },
-      onReportChange: async () => {
-        if (!isSubscribed) return;
-        const freshReports = await fetchReportsFromAppwrite();
-        if (freshReports && isSubscribed) {
-          setReports(freshReports);
-        }
-      },
-      onPremiumRequestChange: async (payload, eventType) => {
-        if (!isSubscribed) return;
-        if (payload) {
-          const docId = payload.id || payload.$id;
-          if (eventType === 'delete') {
-            setPremiumRequests(prev => prev.filter(r => r.id !== docId));
+
+        setStores(prev => {
+          const idx = prev.findIndex(s => s.id === freshId || (s as any).$id === freshId);
+          if (idx >= 0) {
+            const copy = [...prev];
+            copy[idx] = { ...copy[idx], ...payload, id: freshId };
+            return copy;
           } else {
-            setPremiumRequests(prev => {
-              const idx = prev.findIndex(r => r.id === docId);
-              if (idx >= 0) {
-                const copy = [...prev];
-                copy[idx] = { ...copy[idx], ...payload, id: docId };
-                return copy;
-              } else {
-                return [{ ...payload, id: docId } as PremiumRequest, ...prev];
-              }
-            });
+            return [{ ...payload, id: freshId } as Store, ...prev];
           }
-        }
-        const fresh = await fetchPremiumRequestsFromAppwrite();
-        if (fresh && isSubscribed) setPremiumRequests(fresh);
+        });
       },
-      onSubscriptionChange: async (payload, eventType) => {
-        if (!isSubscribed) return;
-        if (payload) {
-          const docId = payload.id || payload.$id;
-          if (eventType === 'delete') {
-            setSubscriptions(prev => prev.filter(s => s.id !== docId));
-          } else {
-            setSubscriptions(prev => {
-              const idx = prev.findIndex(s => s.id === docId);
-              if (idx >= 0) {
-                const copy = [...prev];
-                copy[idx] = { ...copy[idx], ...payload, id: docId };
-                return copy;
-              } else {
-                return [{ ...payload, id: docId } as Subscription, ...prev];
-              }
-            });
-          }
+      onProductChange: (payload, events = []) => {
+        if (!isSubscribed || !payload) return;
+        const freshId = payload.id || payload.$id;
+        if (!freshId) return;
+
+        const isDelete = events.some((e: string) => e.includes('.delete'));
+        if (isDelete) {
+          setProducts(prev => prev.filter(p => p.id !== freshId && (p as any).$id !== freshId));
+          return;
         }
-        const fresh = await fetchSubscriptionsFromAppwrite();
-        if (fresh && isSubscribed) setSubscriptions(fresh);
+
+        setProducts(prev => {
+          const idx = prev.findIndex(p => p.id === freshId || (p as any).$id === freshId);
+          if (idx >= 0) {
+            const copy = [...prev];
+            copy[idx] = { ...copy[idx], ...payload, id: freshId };
+            return copy;
+          } else {
+            return [{ ...payload, id: freshId } as Product, ...prev];
+          }
+        });
       },
-      onNotificationChange: async (payload, eventType) => {
-        if (!isSubscribed) return;
-        if (payload) {
-          const docId = payload.id || payload.$id;
-          if (eventType === 'delete') {
-            setNotifications(prev => prev.filter(n => n.id !== docId));
-          } else {
-            setNotifications(prev => {
-              const idx = prev.findIndex(n => n.id === docId);
-              if (idx >= 0) {
-                const copy = [...prev];
-                copy[idx] = { ...copy[idx], ...payload, id: docId };
-                return copy;
-              } else {
-                return [{ ...payload, id: docId } as AppwriteNotification, ...prev];
-              }
-            });
-          }
+      onReportChange: (payload, events = []) => {
+        if (!isSubscribed || !payload) return;
+        const freshId = payload.id || payload.$id;
+        if (!freshId) return;
+
+        const isDelete = events.some((e: string) => e.includes('.delete'));
+        if (isDelete) {
+          setReports(prev => prev.filter(r => r.id !== freshId && (r as any).$id !== freshId));
+          return;
         }
-        const fresh = await fetchNotificationsFromAppwrite(currentUser?.id);
-        if (fresh && isSubscribed) setNotifications(fresh);
+
+        setReports(prev => {
+          const idx = prev.findIndex(r => r.id === freshId || (r as any).$id === freshId);
+          if (idx >= 0) {
+            const copy = [...prev];
+            copy[idx] = { ...copy[idx], ...payload, id: freshId };
+            return copy;
+          } else {
+            return [{ ...payload, id: freshId } as ReportedContent, ...prev];
+          }
+        });
       },
     });
 
@@ -709,7 +499,7 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       isSubscribed = false;
       unsubscribe();
     };
-  }, [appwriteConfig, syncWithAppwrite, currentUser?.id]);
+  }, [appwriteConfig.projectId, appwriteConfig.databaseId, syncWithAppwrite]);
 
   // Real-time synchronization across installed PWA instances, windows, and tabs
   useEffect(() => {
@@ -756,52 +546,30 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
 
-  // 3. Periodic Background Polling & Visibility / Focus Sync
-  // Guarantees installed PWAs see newly verified stores and products without manual refresh
+  // 3. Tab Visibility & Focus Sync (Throttled to 60s, NO manual setInterval polling)
+  // Appwrite Realtime WebSocket handles instantaneous live updates; this safely handles tab wake-up.
   useEffect(() => {
-    const pollInterval = setInterval(() => {
-      if (appwriteConfig.projectId && appwriteConfig.databaseId) {
-        syncWithAppwrite().catch(() => {});
-      } else {
-        // Fallback: check localStorage for updates from other tabs
-        try {
-          const raw = localStorage.getItem(STORAGE_KEYS.STORES);
-          if (raw) {
-            const parsed = JSON.parse(raw);
-            if (Array.isArray(parsed) && parsed.length !== stores.length) {
-              setStores(parsed);
-            }
-          }
-        } catch {}
-      }
-    }, 6000);
+    let lastSyncTime = Date.now();
 
     const handleFocusOrVisible = () => {
       if (document.visibilityState === 'visible') {
-        try {
-          const raw = localStorage.getItem(STORAGE_KEYS.STORES);
-          if (raw) {
-            const parsed = JSON.parse(raw);
-            if (Array.isArray(parsed)) setStores(parsed);
-          }
-        } catch {}
-        if (appwriteConfig.projectId && appwriteConfig.databaseId) {
-          syncWithAppwrite().catch(() => {});
+        const now = Date.now();
+        // Only re-sync if at least 60 seconds have elapsed since last sync
+        if (now - lastSyncTime > 60000 && appwriteConfig.projectId && appwriteConfig.databaseId) {
+          lastSyncTime = now;
+          syncWithAppwrite(false).catch(() => {});
         }
       }
     };
 
     window.addEventListener('focus', handleFocusOrVisible);
     document.addEventListener('visibilitychange', handleFocusOrVisible);
-    window.addEventListener('online', handleFocusOrVisible);
 
     return () => {
-      clearInterval(pollInterval);
       window.removeEventListener('focus', handleFocusOrVisible);
       document.removeEventListener('visibilitychange', handleFocusOrVisible);
-      window.removeEventListener('online', handleFocusOrVisible);
     };
-  }, [appwriteConfig, syncWithAppwrite, stores.length]);
+  }, [appwriteConfig.projectId, appwriteConfig.databaseId, syncWithAppwrite]);
 
   // Save changes to localStorage as reliable cache
   useEffect(() => {
@@ -855,8 +623,6 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       createdAt: new Date().toISOString(),
     };
     setCurrentUser(newUser);
-    // Register FCM push target and subscribe to topics
-    registerPushOnLogin(newUser).catch(() => {});
   };
 
   const loginBusiness = (email: string, name: string, storeId?: string) => {
@@ -871,8 +637,6 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       storeId: storeId || existingStore?.id,
     };
     setCurrentUser(newUser);
-    // Register FCM push target and subscribe to topics
-    registerPushOnLogin(newUser, storeId || existingStore?.id).catch(() => {});
   };
 
   const loginBusinessWithPassword = async (email: string, password: string): Promise<{ success: boolean; error?: string; store?: Store }> => {
@@ -899,7 +663,7 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     // query Appwrite directly in real-time
     if (!store) {
       try {
-        const liveStores = await fetchStoresFromAppwrite();
+        const liveStores = await fetchStoresFromAppwrite({ limit: 25, forceRefresh: false });
         if (liveStores && liveStores.length > 0) {
           setStores(prev => {
             const map = new Map<string, Store>();
@@ -948,9 +712,6 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       storeId: store.id,
     };
     setCurrentUser(newUser);
-
-    // Register FCM push target and subscribe to topics
-    registerPushOnLogin(newUser, store.id).catch(() => {});
 
     // Refresh cloud products for this store in background
     syncWithAppwrite().catch(() => {});
@@ -1155,8 +916,7 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     deleteStoreInAppwrite(storeId);
   };
 
-  const requestFeaturedPromotion = async (storeId: string) => {
-    const store = stores.find(s => s.id === storeId);
+  const requestFeaturedPromotion = (storeId: string) => {
     const updates = {
       featuredRequested: true,
       featuredRequestDate: new Date().toISOString(),
@@ -1165,26 +925,9 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       prev.map(s => (s.id === storeId ? { ...s, ...updates } : s))
     );
     updateStoreInAppwrite(storeId, updates);
-
-    if (store) {
-      const newReq: PremiumRequest = {
-        id: 'featq-' + Date.now(),
-        storeId: store.id,
-        storeName: store.name,
-        ownerId: store.ownerId,
-        ownerEmail: store.ownerEmail,
-        type: 'featured',
-        amount: 2,
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-      };
-      await createPremiumRequestInAppwrite(newReq);
-      setPremiumRequests(prev => [newReq, ...prev]);
-    }
   };
 
-  const requestPremiumTier = async (storeId: string) => {
-    const store = stores.find(s => s.id === storeId);
+  const requestPremiumTier = (storeId: string) => {
     const updates = {
       premiumRequested: true,
       premiumRequestDate: new Date().toISOString(),
@@ -1193,22 +936,6 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       prev.map(s => (s.id === storeId ? { ...s, ...updates } : s))
     );
     updateStoreInAppwrite(storeId, updates);
-
-    if (store) {
-      const newReq: PremiumRequest = {
-        id: 'premq-' + Date.now(),
-        storeId: store.id,
-        storeName: store.name,
-        ownerId: store.ownerId,
-        ownerEmail: store.ownerEmail,
-        type: 'premium',
-        amount: 1,
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-      };
-      await createPremiumRequestInAppwrite(newReq);
-      setPremiumRequests(prev => [newReq, ...prev]);
-    }
   };
 
   const approveFeaturedPromotion = (storeId: string) => {
@@ -1293,108 +1020,6 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     updateStoreInAppwrite(storeId, { hasPremiumLimit: false, premiumRequested: false });
   };
 
-  // HYBRID: Instant Approval for premium_requests & subscriptions with zero-latency Realtime
-  const instantApprovePremiumRequest = async (requestId: string) => {
-    let req = premiumRequests.find(r => r.id === requestId);
-    if (!req) {
-      const storeWithReq = stores.find(s => s.id === requestId || s.ownerId === requestId);
-      if (storeWithReq) {
-        req = {
-          id: requestId,
-          storeId: storeWithReq.id,
-          storeName: storeWithReq.name,
-          ownerId: storeWithReq.ownerId,
-          ownerEmail: storeWithReq.ownerEmail,
-          type: storeWithReq.premiumRequested ? 'premium' : 'featured',
-          amount: storeWithReq.premiumRequested ? 1 : 2,
-          status: 'pending',
-          createdAt: new Date().toISOString(),
-        };
-      }
-    }
-    if (!req) return;
-
-    const storeId = req.storeId;
-    const store = stores.find(s => s.id === storeId);
-    const ownerId = req.ownerId || store?.ownerId || '';
-    const storeName = req.storeName || store?.name || 'Your Store';
-    const planType = req.type || 'premium';
-
-    // 1. Instant Appwrite update for premium_requests
-    await updatePremiumRequestInAppwrite(req.id, {
-      status: 'approved',
-      approvedAt: new Date().toISOString(),
-    });
-
-    // 2. Create / Update Subscriptions table in Appwrite
-    const newSubscription: Subscription = {
-      id: 'sub-' + Date.now(),
-      storeId,
-      storeName,
-      ownerId,
-      plan: planType,
-      status: 'active',
-      amount: planType === 'featured' ? 2 : 1,
-      startDate: new Date().toISOString(),
-      endDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-    };
-    await createOrUpdateSubscriptionInAppwrite(newSubscription);
-
-    // 3. Update store tier in state and Appwrite
-    if (planType === 'premium') {
-      approvePremiumTier(storeId);
-    } else {
-      approveFeaturedPromotion(storeId);
-    }
-
-    // 4. Send Push Notification via Appwrite Cloud Function / Messaging to topic 'premium-{userId}'
-    await sendPushNotificationViaFunction({
-      topic: `premium-${ownerId}`,
-      title: '🎉 Premium Tier Approved!',
-      body: `Congratulations! ${storeName} is approved for ${planType === 'featured' ? 'Home Page Featured Spotlight' : 'Premium Store with Unlimited Listings & Multi-Photos'}!`,
-      badgeCount: 1,
-      data: { storeId, type: 'premium_approved', plan: planType },
-    });
-
-    // 5. Add document to notifications table for instant Realtime delivery to the store owner
-    const notif: AppwriteNotification = {
-      id: 'notif-' + Date.now(),
-      title: '🎉 Premium Tier Approved!',
-      message: `Congratulations! ${storeName} is approved for ${planType === 'featured' ? 'Home Page Featured Spotlight' : 'Premium Store with Unlimited Listings & Multi-Photos'}. Start uploading more gear now!`,
-      type: 'premium_approved',
-      userId: ownerId || 'all',
-      storeId,
-      isRead: false,
-      createdAt: new Date().toISOString(),
-      badgeCount: 1,
-    };
-    await createNotificationInAppwrite(notif);
-    setNotifications(prev => [notif, ...prev]);
-
-    // 6. Update local in-memory state
-    setPremiumRequests(prev =>
-      prev.map(r => (r.id === req!.id ? { ...r, status: 'approved', approvedAt: new Date().toISOString() } : r))
-    );
-    setSubscriptions(prev => [newSubscription, ...prev.filter(s => s.storeId !== storeId || s.plan !== planType)]);
-  };
-
-  const instantRejectPremiumRequest = async (requestId: string) => {
-    const req = premiumRequests.find(r => r.id === requestId);
-    const storeId = req?.storeId || requestId;
-    if (!storeId) return;
-
-    await updatePremiumRequestInAppwrite(requestId, { status: 'rejected' });
-    if (req?.type === 'featured') {
-      rejectFeaturedPromotion(storeId);
-    } else {
-      rejectPremiumTier(storeId);
-    }
-
-    setPremiumRequests(prev =>
-      prev.map(r => (r.id === requestId ? { ...r, status: 'rejected' } : r))
-    );
-  };
-
   const upgradeToFeatured = (storeId: string) => {
     approveFeaturedPromotion(storeId);
   };
@@ -1468,34 +1093,6 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       notifyInstances('PRODUCTS_UPDATE', updated);
       return updated;
     });
-
-    // Send Push Notification to topic 'new-products' with badge count
-    const nextBadge = unreadNewProductsCount + 1;
-    setUnreadNewProductsCount(nextBadge);
-
-    sendPushNotificationViaFunction({
-      topic: 'new-products',
-      title: '🛒 New Campus Listing!',
-      body: `${newProduct.storeName} listed "${newProduct.title}" for $${newProduct.price}`,
-      badgeCount: nextBadge,
-      data: { productId: newProduct.id, storeId: newProduct.storeId, type: 'new_product' },
-    }).catch(() => {});
-
-    // Create record in notifications table so Realtime delivers live to all clients
-    const notifItem: AppwriteNotification = {
-      id: 'notif-' + Date.now(),
-      title: 'New Listing in Marketplace',
-      message: `"${newProduct.title}" was just listed by ${newProduct.storeName} for $${newProduct.price}`,
-      type: 'new_product',
-      userId: 'all',
-      storeId: newProduct.storeId,
-      productId: newProduct.id,
-      isRead: false,
-      createdAt: new Date().toISOString(),
-      badgeCount: nextBadge,
-    };
-    createNotificationInAppwrite(notifItem).catch(() => {});
-    setNotifications(prev => [notifItem, ...prev]);
 
     return {
       success: isSynced,
@@ -1685,21 +1282,6 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     return testAppwriteConnection(endpoint, projectId);
   };
 
-  // Notifications State & Actions
-  const unreadNotificationsCount = notifications.filter(
-    n => !n.isRead && (!n.userId || n.userId === 'all' || n.userId === currentUser?.id)
-  ).length;
-
-  const markNotificationAsRead = (id: string) => {
-    setNotifications(prev => prev.map(n => (n.id === id ? { ...n, isRead: true } : n)));
-    updateNotificationInAppwrite(id, { isRead: true });
-  };
-
-  const markAllNotificationsAsRead = () => {
-    setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
-    markAllNotificationsAsReadInAppwrite(currentUser?.id);
-  };
-
   // Totals for Dashboard
   const totalWhatsAppClicks = stores.reduce((acc, s) => acc + (s.whatsappClicks || 0), 0);
   const totalRevenue = analyticsEvents
@@ -1739,25 +1321,12 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         revokePremiumTier,
         upgradeToFeatured,
         upgradeToPremiumPhotos,
-        premiumRequests,
-        subscriptions,
-        instantApprovePremiumRequest,
-        instantRejectPremiumRequest,
         products,
         addProduct,
         updateProduct,
         deleteProduct,
         syncProductToCloud,
         syncAllLocalProductsToCloud,
-        notifications,
-        unreadNotificationsCount,
-        unreadNewProductsCount,
-        resetNewProductsBadge,
-        markNotificationAsRead,
-        markAllNotificationsAsRead,
-        notificationPermission,
-        isPushRegistered,
-        requestNotificationPermission,
         trackWhatsAppClick,
         trackStoreView,
         trackProductView,
