@@ -14,6 +14,7 @@ import {
   Sparkles,
   Lock,
   FileText,
+  Edit3,
 } from 'lucide-react';
 import { useMarketplace } from '../context/MarketplaceContext';
 import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
@@ -23,9 +24,10 @@ interface NavbarProps {
   onOpenAuth: () => void;
   onOpenStoreSignup: () => void;
   onOpenStoreLogin: () => void;
-  onOpenStoreDashboard: () => void;
+  onOpenStoreDashboard: (tab?: 'products' | 'profile' | 'upgrades') => void;
   onOpenAdmin: () => void;
   onOpenNotifications: () => void;
+  onOpenUserProfile?: () => void;
   activeTab: 'marketplace' | 'stores';
   setActiveTab: (tab: 'marketplace' | 'stores') => void;
 }
@@ -37,6 +39,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenStoreDashboard,
   onOpenAdmin,
   onOpenNotifications,
+  onOpenUserProfile,
   activeTab,
   setActiveTab,
 }) => {
@@ -102,8 +105,32 @@ export const Navbar: React.FC<NavbarProps> = ({
               </span>
             </a>
 
-            {/* Right: Notification Bell, Install App & Menu Button */}
+            {/* Right: User Avatar / Notification Bell, Install App & Menu Button */}
             <div className="flex items-center gap-2">
+              {currentUser && (
+                <button
+                  type="button"
+                  onClick={onOpenUserProfile}
+                  className="flex items-center gap-1.5 p-1 sm:px-2.5 sm:py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-200 hover:text-white transition-all cursor-pointer shadow-sm"
+                  title="Edit Profile"
+                >
+                  {currentUser.avatar ? (
+                    <img
+                      src={currentUser.avatar}
+                      alt={currentUser.name}
+                      className="w-7 h-7 rounded-full object-cover border border-orange-500/40"
+                    />
+                  ) : (
+                    <div className="w-7 h-7 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-xs font-bold text-orange-400">
+                      {currentUser.name.slice(0, 2).toUpperCase()}
+                    </div>
+                  )}
+                  <span className="text-xs font-semibold hidden md:inline truncate max-w-[90px]">
+                    {currentUser.name.split(' ')[0]}
+                  </span>
+                </button>
+              )}
+
               {/* Notification Bell with Realtime Badge Count */}
               <button
                 onClick={onOpenNotifications}
@@ -269,26 +296,62 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </div>
 
                 {currentStore ? (
-                  <button
-                    onClick={() => {
-                      setMenuOpen(false);
-                      onOpenStoreDashboard();
-                    }}
-                    className="w-full p-3 rounded-xl bg-gradient-to-r from-amber-500/15 to-orange-500/15 border border-amber-500/40 text-left text-sm font-semibold flex items-center gap-3 text-amber-300 hover:brightness-110 transition-all cursor-pointer"
-                  >
-                    <StoreIcon className="w-5 h-5 text-amber-400" />
-                    <div>
-                      <div className="flex items-center gap-1.5">
-                        <span>Manage {currentStore.name}</span>
-                        {currentStore.isVerified && (
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                        )}
+                  <div className="space-y-2">
+                    <button
+                      onClick={() => {
+                        setMenuOpen(false);
+                        onOpenStoreDashboard('products');
+                      }}
+                      className="w-full p-3 rounded-xl bg-gradient-to-r from-amber-500/15 to-orange-500/15 border border-amber-500/40 text-left text-sm font-semibold flex items-center gap-3 text-amber-300 hover:brightness-110 transition-all cursor-pointer"
+                    >
+                      <StoreIcon className="w-5 h-5 text-amber-400" />
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <span>Manage {currentStore.name}</span>
+                          {currentStore.isVerified && (
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                          )}
+                        </div>
+                        <div className="text-xs font-normal text-amber-300/80">
+                          Inventory, WhatsApp chats & cloud sync
+                        </div>
                       </div>
-                      <div className="text-xs font-normal text-amber-300/80">
-                        Products, WhatsApp analytics & upgrades
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        onOpenStoreDashboard('profile');
+                      }}
+                      className="w-full p-2.5 rounded-xl bg-slate-950/60 hover:bg-slate-800 border border-slate-800 text-left text-xs font-semibold flex items-center gap-2.5 text-slate-200 transition-all cursor-pointer"
+                    >
+                      <Edit3 className="w-4 h-4 text-orange-400" />
+                      <div>
+                        <div>Edit Business Profile, Logo & Phone</div>
+                        <div className="text-[11px] font-normal text-slate-400">
+                          Change name, phone, bio & photo
+                        </div>
                       </div>
-                    </div>
-                  </button>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        onOpenStoreDashboard('upgrades');
+                      }}
+                      className="w-full p-2.5 rounded-xl bg-gradient-to-r from-amber-500/10 to-orange-500/10 hover:from-amber-500/20 hover:to-orange-500/20 border border-amber-500/30 text-left text-xs font-semibold flex items-center gap-2.5 text-amber-300 transition-all cursor-pointer"
+                    >
+                      <Sparkles className="w-4 h-4 text-amber-400" />
+                      <div>
+                        <div>Premium Promotions & Spotlight</div>
+                        <div className="text-[11px] font-normal text-amber-300/80">
+                          Featured carousel, unlimited tier & badges
+                        </div>
+                      </div>
+                    </button>
+                  </div>
                 ) : (
                   <div className="space-y-2">
                     {/* Separate Sign In Button for Registered Businesses */}
@@ -372,7 +435,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                     <div>
                       <div>Admin Portal</div>
                       <div className="text-xs font-normal text-slate-400">
-                        Verify stores, promotions & Appwrite
+                        Verify stores, promotions & settings
                       </div>
                     </div>
                   </div>
@@ -393,30 +456,53 @@ export const Navbar: React.FC<NavbarProps> = ({
             {/* Bottom: User Sign In / Profile */}
             <div className="pt-6 border-t border-slate-800 space-y-3">
               {currentUser ? (
-                <div className="flex items-center justify-between p-3 rounded-xl bg-slate-950/60 border border-slate-800">
-                  <div className="flex items-center gap-2.5 truncate">
-                    <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-xs font-bold text-orange-400 shrink-0">
-                      {currentUser.name.slice(0, 2).toUpperCase()}
-                    </div>
-                    <div className="min-w-0">
-                      <div className="text-xs font-bold text-white truncate">
-                        {currentUser.name}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between p-3 rounded-xl bg-slate-950/60 border border-slate-800">
+                    <div className="flex items-center gap-2.5 truncate">
+                      {currentUser.avatar ? (
+                        <img
+                          src={currentUser.avatar}
+                          alt={currentUser.name}
+                          className="w-8 h-8 rounded-full object-cover border border-orange-500/40 shrink-0"
+                        />
+                      ) : (
+                        <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-xs font-bold text-orange-400 shrink-0">
+                          {currentUser.name.slice(0, 2).toUpperCase()}
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <div className="text-xs font-bold text-white truncate">
+                          {currentUser.name}
+                        </div>
+                        <div className="text-[11px] text-slate-400 truncate">
+                          {currentUser.email}
+                        </div>
                       </div>
-                      <div className="text-[11px] text-slate-400 truncate">
-                        {currentUser.email}
-                      </div>
                     </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        logout();
+                        setMenuOpen(false);
+                      }}
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition-colors cursor-pointer"
+                      title="Sign Out"
+                    >
+                      <LogOut className="w-4 h-4" />
+                    </button>
                   </div>
 
                   <button
+                    type="button"
                     onClick={() => {
-                      logout();
                       setMenuOpen(false);
+                      onOpenUserProfile?.();
                     }}
-                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition-colors cursor-pointer"
-                    title="Sign Out"
+                    className="w-full py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700/80 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer shadow-sm"
                   >
-                    <LogOut className="w-4 h-4" />
+                    <Edit3 className="w-3.5 h-3.5 text-orange-400" />
+                    <span>Edit Profile & Photo</span>
                   </button>
                 </div>
               ) : (

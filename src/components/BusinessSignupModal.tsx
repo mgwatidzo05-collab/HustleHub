@@ -18,6 +18,7 @@ import {
 import { StoreCategory } from '../types';
 import { useMarketplace } from '../context/MarketplaceContext';
 import { uploadImageToStorage } from '../lib/appwrite';
+import { compressImageFile } from '../lib/imageCompressor';
 import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 
 interface BusinessSignupModalProps {
@@ -54,7 +55,7 @@ export const BusinessSignupModal: React.FC<BusinessSignupModalProps> = ({
   const [location, setLocation] = useState('');
   const [delivers, setDelivers] = useState(true);
   const [deliveryNotes, setDeliveryNotes] = useState('Free drop-off anywhere on campus within 30 mins');
-  const [whatsappNumber, setWhatsappNumber] = useState('+263');
+  const [whatsappNumber, setWhatsappNumber] = useState('');
   const [logoUrl, setLogoUrl] = useState('');
   const [uploadingImage, setUploadingImage] = useState(false);
 
@@ -81,7 +82,7 @@ export const BusinessSignupModal: React.FC<BusinessSignupModalProps> = ({
 
     setUploadingImage(true);
     try {
-      const url = await uploadImageToStorage(file);
+      const url = await compressImageFile(file, { maxWidth: 800, maxHeight: 800, quality: 0.85 });
       setLogoUrl(url);
     } catch (err: any) {
       console.error(err);
@@ -456,7 +457,7 @@ export const BusinessSignupModal: React.FC<BusinessSignupModalProps> = ({
               {/* Logo / Photo Upload */}
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  Store Logo / Cover Photo (Appwrite Storage Bucket)
+                  Store Logo / Profile Picture (From Device Gallery)
                 </label>
                 <div className="flex items-center gap-3">
                   {logoUrl ? (
@@ -472,9 +473,9 @@ export const BusinessSignupModal: React.FC<BusinessSignupModalProps> = ({
                   )}
 
                   <label className="flex-1 cursor-pointer">
-                    <div className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs text-slate-200 flex items-center justify-center gap-2 transition-colors">
+                    <div className="px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs text-slate-200 flex items-center justify-center gap-2 transition-colors cursor-pointer active:scale-95">
                       <Upload className="w-3.5 h-3.5 text-orange-400" />
-                      <span>{uploadingImage ? 'Uploading...' : 'Upload Image File'}</span>
+                      <span>{uploadingImage ? 'Uploading from Gallery...' : 'Upload from Gallery'}</span>
                     </div>
                     <input
                       type="file"

@@ -23,7 +23,7 @@ interface StoreDetailModalProps {
   store: Store | null;
   onClose: () => void;
   onSelectProduct: (product: Product) => void;
-  onOpenStoreDashboard: () => void;
+  onOpenStoreDashboard: (tab?: 'products' | 'profile' | 'upgrades') => void;
   onOpenReport: (targetType: 'product' | 'store', targetId: string, title: string) => void;
 }
 
@@ -120,16 +120,27 @@ export const StoreDetailModal: React.FC<StoreDetailModalProps> = ({
             {/* CTAs */}
             <div className="flex items-center gap-2">
               {isOwner ? (
-                <button
-                  onClick={() => {
-                    onClose();
-                    onOpenStoreDashboard();
-                  }}
-                  className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors"
-                >
-                  <Edit className="w-4 h-4 text-orange-400" />
-                  <span>Manage My Store</span>
-                </button>
+                <>
+                  <button
+                    onClick={() => {
+                      onClose();
+                      onOpenStoreDashboard('profile');
+                    }}
+                    className="px-3 py-2 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm cursor-pointer"
+                  >
+                    <Edit className="w-3.5 h-3.5" />
+                    <span>Edit Profile</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      onClose();
+                      onOpenStoreDashboard('products');
+                    }}
+                    className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <span>Manage Inventory</span>
+                  </button>
+                </>
               ) : null}
 
               {store.isFrozen ? (

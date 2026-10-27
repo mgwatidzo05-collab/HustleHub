@@ -832,6 +832,51 @@ export const updateStoreInAppwrite = async (storeId: string, updates: Partial<St
   let targetDocId = (updates as any).appwriteDocId || storeId.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 36);
 
   // Provide dual casing aliases
+  if (updates.name !== undefined) {
+    clean.name = updates.name;
+    clean.storeName = updates.name;
+    clean.storename = updates.name;
+  }
+  if (updates.ownerName !== undefined) {
+    clean.ownerName = updates.ownerName;
+    clean.ownername = updates.ownerName;
+  }
+  if (updates.whatsappNumber !== undefined) {
+    clean.whatsappNumber = updates.whatsappNumber;
+    clean.whatsappnumber = updates.whatsappNumber;
+    clean.whatsapp = updates.whatsappNumber;
+  }
+  if (updates.logoUrl !== undefined) {
+    clean.logoUrl = updates.logoUrl;
+    clean.logourl = updates.logoUrl;
+  }
+  if (updates.bannerUrl !== undefined) {
+    clean.bannerUrl = updates.bannerUrl;
+    clean.bannerurl = updates.bannerUrl;
+  }
+  if (updates.tagline !== undefined) {
+    clean.tagline = updates.tagline;
+  }
+  if (updates.description !== undefined) {
+    clean.description = updates.description;
+  }
+  if (updates.category !== undefined) {
+    clean.category = updates.category;
+  }
+  if (updates.location !== undefined) {
+    clean.location = updates.location;
+  }
+  if (updates.delivers !== undefined) {
+    clean.delivers = Boolean(updates.delivers);
+  }
+  if (updates.deliveryNotes !== undefined) {
+    clean.deliveryNotes = updates.deliveryNotes;
+    clean.deliverynotes = updates.deliveryNotes;
+  }
+  if (updates.password !== undefined) {
+    clean.password = updates.password;
+    clean.pass = updates.password;
+  }
   if (updates.isVerified !== undefined) {
     clean.isVerified = updates.isVerified;
     clean.isverified = updates.isVerified;

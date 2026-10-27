@@ -22,9 +22,11 @@ export const ProductCard: React.FC<ProductCardProps> = ({
 }) => {
   const { trackWhatsAppClick, trackProductView, stores } = useMarketplace();
 
-  // Dynamically resolve store verification status so unverified stores immediately lose the blue tick
+  // Dynamically resolve store verification status and updated store details
   const parentStore = stores.find((s) => s.id === product.storeId);
   const isStoreVerified = parentStore ? Boolean(parentStore.isVerified) : Boolean(product.storeIsVerified);
+  const currentStoreName = parentStore?.name || product.storeName;
+  const currentStoreLocation = parentStore?.location || product.storeLocation;
 
   const handleCardClick = () => {
     trackProductView(product.id);
@@ -99,14 +101,14 @@ export const ProductCard: React.FC<ProductCardProps> = ({
           {/* Store Info */}
           <div className="space-y-1 text-xs text-slate-400 mb-3">
             <div className="flex items-center gap-1 font-medium text-slate-300 truncate">
-              <span className="truncate">{product.storeName}</span>
+              <span className="truncate">{currentStoreName}</span>
               {isStoreVerified && (
                 <CheckCircle2 className="w-3.5 h-3.5 text-blue-400 shrink-0" />
               )}
             </div>
             <div className="flex items-center gap-1 text-[11px] text-slate-500 truncate">
               <MapPin className="w-3 h-3 text-slate-500 shrink-0" />
-              <span className="truncate">{product.storeLocation}</span>
+              <span className="truncate">{currentStoreLocation}</span>
             </div>
           </div>
         </div>

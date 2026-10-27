@@ -16,6 +16,7 @@ interface MobileBottomNavProps {
   onOpenAdmin: () => void;
   onOpenAuth: () => void;
   onOpenNotifications: () => void;
+  onOpenUserProfile?: () => void;
 }
 
 export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
@@ -26,6 +27,7 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
   onOpenAdmin,
   onOpenAuth,
   onOpenNotifications,
+  onOpenUserProfile,
 }) => {
   const { currentStore, currentUser, isAdmin, unreadNotificationsCount, unreadNewProductsCount } = useMarketplace();
 
@@ -106,12 +108,20 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
           </button>
         ) : (
           <button
-            onClick={onOpenAuth}
+            onClick={currentUser ? onOpenUserProfile : onOpenAuth}
             className={`flex flex-col items-center gap-1 py-1 px-2 transition-colors ${
-              currentUser ? 'text-blue-400' : 'text-slate-400 hover:text-slate-200'
+              currentUser ? 'text-orange-400' : 'text-slate-400 hover:text-slate-200'
             }`}
           >
-            <UserIcon className="w-5 h-5" />
+            {currentUser?.avatar ? (
+              <img
+                src={currentUser.avatar}
+                alt=""
+                className="w-5 h-5 rounded-full object-cover border border-orange-500/50"
+              />
+            ) : (
+              <UserIcon className="w-5 h-5" />
+            )}
             <span className="text-[10px] font-medium truncate max-w-[50px]">
               {currentUser ? currentUser.name.split(' ')[0] : 'Sign In'}
             </span>

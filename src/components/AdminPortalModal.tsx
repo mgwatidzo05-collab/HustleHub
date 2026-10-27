@@ -28,7 +28,7 @@ import {
   MapPin,
   Truck,
 } from 'lucide-react';
-import { Store, Product, ReportedContent } from '../types';
+import { Store, Product, ReportedContent, PremiumRequest, Subscription } from '../types';
 import { useMarketplace } from '../context/MarketplaceContext';
 import { useBodyScrollLock } from '../hooks/useBodyScrollLock';
 
@@ -1044,9 +1044,21 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                                       Featured Paid ($2)
                                     </span>
                                   )}
+                                  {store.featuredRequested && !store.isFeatured && (
+                                    <span className="text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold border border-amber-500/40 flex items-center gap-1">
+                                      <Sparkles className="w-3 h-3 text-amber-400" />
+                                      Requested Featured
+                                    </span>
+                                  )}
                                   {store.hasPremiumLimit && (
                                     <span className="text-[10px] px-2 py-0.5 rounded bg-blue-600 text-white font-bold">
                                       Premium Photos Paid ($1)
+                                    </span>
+                                  )}
+                                  {store.premiumRequested && !store.hasPremiumLimit && (
+                                    <span className="text-[10px] px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 font-bold border border-blue-500/40 flex items-center gap-1">
+                                      <Layers className="w-3 h-3 text-blue-400" />
+                                      Requested Premium
                                     </span>
                                   )}
                                   {store.isFrozen && (
@@ -1100,6 +1112,30 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                                   title="Revoke verification tick"
                                 >
                                   Revoke Tick
+                                </button>
+                              )}
+
+                              {/* Activate Requested Featured Spotlight */}
+                              {store.featuredRequested && !store.isFeatured && (
+                                <button
+                                  onClick={() => approveFeaturedPromotion(store.id)}
+                                  className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs flex items-center gap-1 transition-colors shadow-sm cursor-pointer"
+                                  title="Activate Featured Home Page Spotlight"
+                                >
+                                  <Sparkles className="w-3.5 h-3.5" />
+                                  <span>Activate Featured</span>
+                                </button>
+                              )}
+
+                              {/* Activate Requested Premium Tier */}
+                              {store.premiumRequested && !store.hasPremiumLimit && (
+                                <button
+                                  onClick={() => approvePremiumTier(store.id)}
+                                  className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs flex items-center gap-1 transition-colors shadow-sm cursor-pointer"
+                                  title="Activate Premium Unlimited Items & Photos"
+                                >
+                                  <Layers className="w-3.5 h-3.5" />
+                                  <span>Activate Premium</span>
                                 </button>
                               )}
 
@@ -1213,7 +1249,7 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                         <Sparkles className="w-3.5 h-3.5" />
                         <span>Live Premium Requests (Realtime table: premium_requests)</span>
                         <span className="px-1.5 py-0.2 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-bold">
-                          {premiumRequests.filter((r) => r.status === 'pending').length} pending
+                          {premiumRequests.filter((r: PremiumRequest) => r.status === 'pending').length} pending
                         </span>
                       </h4>
                       <p className="text-[11px] text-slate-400 mt-0.5">
@@ -1222,15 +1258,15 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                     </div>
                   </div>
 
-                  {premiumRequests.filter((r) => r.status === 'pending').length === 0 ? (
+                  {premiumRequests.filter((r: PremiumRequest) => r.status === 'pending').length === 0 ? (
                     <div className="p-4 rounded-xl bg-slate-900/60 border border-dashed border-slate-800 text-center text-xs text-slate-500">
                       No pending requests in <code className="text-orange-400 font-mono">premium_requests</code> collection. New requests stream here live.
                     </div>
                   ) : (
                     <div className="space-y-3">
                       {premiumRequests
-                        .filter((r) => r.status === 'pending')
-                        .map((req) => (
+                        .filter((r: PremiumRequest) => r.status === 'pending')
+                        .map((req: PremiumRequest) => (
                           <div
                             key={req.id}
                             className="p-3.5 rounded-xl bg-slate-900 border border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-md"
@@ -1296,7 +1332,7 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                       <CreditCard className="w-3.5 h-3.5" />
                       <span>Active Subscriptions (Realtime table: subscriptions)</span>
                       <span className="px-1.5 py-0.2 rounded-full bg-blue-500/20 text-blue-300 text-[10px]">
-                        {subscriptions.filter((s) => s.status === 'active').length} active
+                        {subscriptions.filter((s: Subscription) => s.status === 'active').length} active
                       </span>
                     </h4>
                   </div>
@@ -1307,7 +1343,7 @@ export const AdminPortalModal: React.FC<AdminPortalModalProps> = ({
                     </p>
                   ) : (
                     <div className="space-y-2">
-                      {subscriptions.map((sub) => (
+                      {subscriptions.map((sub: Subscription) => (
                         <div
                           key={sub.id}
                           className="p-3 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-between text-xs gap-3"

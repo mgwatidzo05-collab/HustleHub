@@ -244,7 +244,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
               className="w-full py-3.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-bold text-sm shadow-lg shadow-emerald-900/30 flex items-center justify-center gap-2 transition-all active:scale-[0.99] cursor-pointer"
             >
               <MessageCircle className="w-5 h-5" />
-              <span>Contact Student on WhatsApp ({product.storeWhatsApp})</span>
+              <span>Contact Student on WhatsApp ({store?.whatsappNumber || product.storeWhatsApp})</span>
             </button>
             <p className="text-center text-[11px] text-slate-500">
               Direct peer-to-peer messaging. HustleHub does not take commissions from student sales.

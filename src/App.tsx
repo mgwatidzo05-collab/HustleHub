@@ -13,6 +13,8 @@ import { BusinessLoginModal } from './components/BusinessLoginModal';
 import { BusinessDashboardModal } from './components/BusinessDashboardModal';
 import { AdminPortalModal } from './components/AdminPortalModal';
 import { CustomerAuthModal } from './components/CustomerAuthModal';
+import { UserProfileModal } from './components/UserProfileModal';
+import { NotificationCenterModal } from './components/NotificationCenterModal';
 import { ReportModal } from './components/ReportModal';
 import { MobileBottomNav } from './components/MobileBottomNav';
 import { TermsModal } from './components/TermsModal';
@@ -130,6 +132,8 @@ const MarketplaceApp: React.FC = () => {
   const [isStoreLoginOpen, setIsStoreLoginOpenState] = useState(() => activeModal === 'login');
   const [isStoreDashboardOpen, setIsStoreDashboardOpenState] = useState(() => activeModal === 'dashboard');
   const [isAdminOpen, setIsAdminOpenState] = useState(() => activeModal === 'admin');
+  const [isUserProfileOpen, setIsUserProfileOpen] = useState(false);
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
 
   // Modal setters that sync with URL and storage
   const setIsAuthOpen = (open: boolean) => {
@@ -147,9 +151,17 @@ const MarketplaceApp: React.FC = () => {
     syncUrlAndStorage('modal', open ? 'login' : null);
   };
 
+  const [storeDashboardTab, setStoreDashboardTab] = useState<'products' | 'profile' | 'upgrades'>('products');
+
   const setIsStoreDashboardOpen = (open: boolean) => {
     setIsStoreDashboardOpenState(open);
     syncUrlAndStorage('modal', open ? 'dashboard' : null);
+  };
+
+  const openStoreDashboard = (tab: 'products' | 'profile' | 'upgrades' = 'products') => {
+    setStoreDashboardTab(tab);
+    setIsStoreDashboardOpenState(true);
+    syncUrlAndStorage('modal', 'dashboard');
   };
 
   const setIsAdminOpen = (open: boolean) => {
@@ -297,8 +309,10 @@ const MarketplaceApp: React.FC = () => {
         onOpenAuth={() => setIsAuthOpen(true)}
         onOpenStoreSignup={() => setIsStoreSignupOpen(true)}
         onOpenStoreLogin={() => setIsStoreLoginOpen(true)}
-        onOpenStoreDashboard={() => setIsStoreDashboardOpen(true)}
+        onOpenStoreDashboard={(tab) => openStoreDashboard(tab)}
         onOpenAdmin={() => setIsAdminOpen(true)}
+        onOpenNotifications={() => setIsNotificationsOpen(true)}
+        onOpenUserProfile={() => setIsUserProfileOpen(true)}
         activeTab={activeTab}
         setActiveTab={(t) => setActiveTab(t)}
       />
@@ -316,7 +330,7 @@ const MarketplaceApp: React.FC = () => {
             <HeroSection
               onOpenStoreSignup={() => setIsStoreSignupOpen(true)}
               onOpenStoreLogin={() => setIsStoreLoginOpen(true)}
-              onOpenStoreDashboard={() => setIsStoreDashboardOpen(true)}
+              onOpenStoreDashboard={() => openStoreDashboard('products')}
               onExplore={() => {
                 const el = document.getElementById('marketplace-catalog');
                 el?.scrollIntoView({ behavior: 'smooth' });
@@ -812,12 +826,30 @@ const MarketplaceApp: React.FC = () => {
         activeTab={activeTab}
         setActiveTab={(t) => setActiveTab(t)}
         onOpenStoreSignup={() => setIsStoreSignupOpen(true)}
-        onOpenStoreDashboard={() => setIsStoreDashboardOpen(true)}
+        onOpenStoreDashboard={() => openStoreDashboard('products')}
         onOpenAdmin={() => setIsAdminOpen(true)}
         onOpenAuth={() => setIsAuthOpen(true)}
+        onOpenNotifications={() => setIsNotificationsOpen(true)}
+        onOpenUserProfile={() => setIsUserProfileOpen(true)}
       />
 
       {/* MODALS WITH SCROLL LOCK */}
+      {isUserProfileOpen && (
+        <UserProfileModal
+          isOpen={isUserProfileOpen}
+          onClose={() => setIsUserProfileOpen(false)}
+        />
+      )}
+
+      {isNotificationsOpen && (
+        <NotificationCenterModal
+          isOpen={isNotificationsOpen}
+          onClose={() => setIsNotificationsOpen(false)}
+          onSelectProduct={(p) => setSelectedProduct(p)}
+          onSelectStore={(st) => setSelectedStore(st)}
+        />
+      )}
+
       {selectedProduct && (
         <ProductDetailModal
           product={selectedProduct}
@@ -834,7 +866,7 @@ const MarketplaceApp: React.FC = () => {
           store={selectedStore}
           onClose={() => setSelectedStore(null)}
           onSelectProduct={(p) => setSelectedProduct(p)}
-          onOpenStoreDashboard={() => setIsStoreDashboardOpen(true)}
+          onOpenStoreDashboard={(tab) => openStoreDashboard(tab)}
           onOpenReport={(type, id, title) =>
             setReportTarget({ targetType: type, targetId: id, targetTitle: title })
           }
@@ -851,7 +883,7 @@ const MarketplaceApp: React.FC = () => {
           }}
           onSuccess={() => {
             setIsStoreSignupOpen(false);
-            setIsStoreDashboardOpen(true);
+            openStoreDashboard('products');
           }}
         />
       )}
@@ -870,7 +902,7 @@ const MarketplaceApp: React.FC = () => {
           }}
           onSuccess={() => {
             setIsStoreLoginOpen(false);
-            setIsStoreDashboardOpen(true);
+            openStoreDashboard('products');
           }}
         />
       )}
@@ -880,6 +912,7 @@ const MarketplaceApp: React.FC = () => {
           isOpen={isStoreDashboardOpen}
           onClose={() => setIsStoreDashboardOpen(false)}
           onOpenStorePreview={(st) => setSelectedStore(st)}
+          initialTab={storeDashboardTab}
         />
       )}
 
@@ -903,7 +936,7 @@ const MarketplaceApp: React.FC = () => {
             setIsAuthOpen(false);
             setIsStoreLoginOpen(true);
           }}
-          onOpenStoreDashboard={() => setIsStoreDashboardOpen(true)}
+          onOpenStoreDashboard={() => openStoreDashboard('products')}
         />
       )}
 

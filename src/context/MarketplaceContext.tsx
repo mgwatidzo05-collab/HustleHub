@@ -7,6 +7,9 @@ import {
   AnalyticsEvent,
   AppwriteConfig,
   StoreCategory,
+  AppwriteNotification,
+  PremiumRequest,
+  Subscription,
 } from '../types';
 import { INITIAL_STORES, INITIAL_PRODUCTS, INITIAL_REPORTS } from '../data/initialData';
 import {
@@ -40,6 +43,7 @@ interface MarketplaceContextType {
   loginBusinessWithPassword: (email: string, password: string) => Promise<{ success: boolean; error?: string; store?: Store }>;
   loginWithOAuth: (provider: 'google' | 'github') => Promise<void>;
   logout: () => void;
+  updateUserProfile: (updates: Partial<User>) => void;
 
   // Stores
   stores: Store[];
@@ -63,6 +67,8 @@ interface MarketplaceContextType {
   revokePremiumTier: (storeId: string) => void;
   upgradeToFeatured: (storeId: string) => void;
   upgradeToPremiumPhotos: (storeId: string) => void;
+  instantActivateFeatured: (storeId: string) => void;
+  instantActivatePremium: (storeId: string) => void;
 
   // Products
   products: Product[];
@@ -73,6 +79,7 @@ interface MarketplaceContextType {
   syncAllLocalProductsToCloud: () => Promise<{ syncedCount: number; failedCount: number }>;
 
   // Interaction & WhatsApp Analytics
+  getWhatsAppUrl: (storeId: string, productId?: string, customNote?: string) => string;
   trackWhatsAppClick: (storeId: string, productId?: string, customNote?: string) => string;
   trackStoreView: (storeId: string) => void;
   trackProductView: (productId: string) => void;
@@ -115,6 +122,22 @@ interface MarketplaceContextType {
   testAppwrite: (endpoint: string, projectId: string) => Promise<{ success: boolean; message: string }>;
   syncWithAppwrite: (forceRefresh?: boolean) => Promise<void>;
   isAppwriteLive: boolean;
+
+  // Notifications
+  notifications: AppwriteNotification[];
+  unreadNotificationsCount: number;
+  unreadNewProductsCount: number;
+  markNotificationAsRead: (id: string) => void;
+  markAllNotificationsAsRead: () => void;
+  notificationPermission: NotificationPermission | 'default';
+  requestNotificationPermission: () => Promise<boolean>;
+  isPushRegistered: boolean;
+
+  // Premium Requests & Subscriptions
+  premiumRequests: PremiumRequest[];
+  subscriptions: Subscription[];
+  instantApprovePremiumRequest: (requestId: string) => Promise<boolean>;
+  instantRejectPremiumRequest: (requestId: string) => Promise<boolean>;
 }
 
 // Purge all demo data from browser storage for clean production launch
@@ -733,6 +756,41 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     setCurrentUser(null);
   };
 
+  const updateUserProfile = (updates: Partial<User>) => {
+    setCurrentUser(prev => {
+      if (!prev) return null;
+      const updated = { ...prev, ...updates };
+      try {
+        localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(updated));
+      } catch (err) {
+        console.error('Failed to persist user profile', err);
+      }
+      return updated;
+    });
+
+    // If this user owns a store, synchronize store profile and all its products
+    const storeToUpdate = stores.find(s =>
+      (currentUser?.storeId && s.id === currentUser.storeId) ||
+      (currentUser?.email && s.ownerEmail.toLowerCase() === currentUser.email.toLowerCase())
+    );
+
+    if (storeToUpdate) {
+      const storeUpdates: Partial<Store> = {};
+      if (updates.name && updates.name !== storeToUpdate.ownerName) {
+        storeUpdates.ownerName = updates.name;
+      }
+      if (updates.phone && updates.phone !== storeToUpdate.whatsappNumber) {
+        storeUpdates.whatsappNumber = updates.phone;
+      }
+      if (updates.avatar && !storeToUpdate.logoUrl) {
+        storeUpdates.logoUrl = updates.avatar;
+      }
+      if (Object.keys(storeUpdates).length > 0) {
+        updateStoreProfile(storeToUpdate.id, storeUpdates);
+      }
+    }
+  };
+
   // Find current user's store
   const currentStore = currentUser?.storeId
     ? stores.find(s => s.id === currentUser.storeId) || null
@@ -786,29 +844,59 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const updateStoreProfile = (storeId: string, updates: Partial<Store>) => {
     setStores(prev => {
       const updated = prev.map(s => (s.id === storeId ? { ...s, ...updates } : s));
+      try {
+        localStorage.setItem(STORAGE_KEYS.STORES, JSON.stringify(updated));
+      } catch {}
       notifyInstances('STORES_UPDATE', updated);
       return updated;
     });
+
+    // Keep currentUser session in sync if the current user owns this store
+    setCurrentUser(prevUser => {
+      if (!prevUser) return null;
+      if (prevUser.storeId === storeId || (updates.ownerEmail && prevUser.email.toLowerCase() === updates.ownerEmail.toLowerCase())) {
+        const updatedUser: User = {
+          ...prevUser,
+          name: updates.ownerName || updates.name || prevUser.name,
+          avatar: updates.logoUrl || prevUser.avatar,
+        };
+        try {
+          localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(updatedUser));
+        } catch {}
+        return updatedUser;
+      }
+      return prevUser;
+    });
+
     // Sync to Appwrite
     updateStoreInAppwrite(storeId, updates);
 
-    // Also update denormalized store fields on products
-    if (updates.name || updates.whatsappNumber || updates.location) {
-      setProducts(prev => {
-        const updated = prev.map(p =>
-          p.storeId === storeId
-            ? {
-                ...p,
-                storeName: updates.name || p.storeName,
-                storeWhatsApp: updates.whatsappNumber || p.storeWhatsApp,
-                storeLocation: updates.location || p.storeLocation,
-              }
-            : p
-        );
-        notifyInstances('PRODUCTS_UPDATE', updated);
-        return updated;
+    // CRITICAL: Update ALL products already added for this store
+    setProducts(prev => {
+      const updated = prev.map(p => {
+        if (p.storeId === storeId) {
+          const prodUpdates = {
+            storeName: updates.name !== undefined ? updates.name : p.storeName,
+            storeWhatsApp: updates.whatsappNumber !== undefined ? updates.whatsappNumber : p.storeWhatsApp,
+            storeLocation: updates.location !== undefined ? updates.location : p.storeLocation,
+            storeIsVerified: updates.isVerified !== undefined ? updates.isVerified : p.storeIsVerified,
+          };
+          if (p.appwriteDocId || p.id) {
+            updateProductInAppwrite(p.id, prodUpdates).catch(() => {});
+          }
+          return {
+            ...p,
+            ...prodUpdates,
+          };
+        }
+        return p;
       });
-    }
+      try {
+        localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(updated));
+      } catch {}
+      notifyInstances('PRODUCTS_UPDATE', updated);
+      return updated;
+    });
   };
 
   const requestStoreVerification = (storeId: string) => {
@@ -842,7 +930,15 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       return updated;
     });
     setProducts(prev => {
-      const updated = prev.map(p => (p.storeId === storeId ? { ...p, storeIsVerified: true } : p));
+      const updated = prev.map(p => {
+        if (p.storeId === storeId) {
+          if (p.appwriteDocId || p.id) {
+            updateProductInAppwrite(p.id, { storeIsVerified: true }).catch(() => {});
+          }
+          return { ...p, storeIsVerified: true };
+        }
+        return p;
+      });
       try {
         localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(updated));
       } catch {}
@@ -870,7 +966,15 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       return updated;
     });
     setProducts(prev => {
-      const updated = prev.map(p => (p.storeId === storeId ? { ...p, storeIsVerified: false } : p));
+      const updated = prev.map(p => {
+        if (p.storeId === storeId) {
+          if (p.appwriteDocId || p.id) {
+            updateProductInAppwrite(p.id, { storeIsVerified: false }).catch(() => {});
+          }
+          return { ...p, storeIsVerified: false };
+        }
+        return p;
+      });
       try {
         localStorage.setItem(STORAGE_KEYS.PRODUCTS, JSON.stringify(updated));
       } catch {}
@@ -917,25 +1021,83 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
   };
 
   const requestFeaturedPromotion = (storeId: string) => {
+    const store = stores.find(s => s.id === storeId);
     const updates = {
       featuredRequested: true,
       featuredRequestDate: new Date().toISOString(),
     };
-    setStores(prev =>
-      prev.map(s => (s.id === storeId ? { ...s, ...updates } : s))
-    );
+    setStores(prev => {
+      const updated = prev.map(s => (s.id === storeId ? { ...s, ...updates } : s));
+      try {
+        localStorage.setItem(STORAGE_KEYS.STORES, JSON.stringify(updated));
+      } catch {}
+      notifyInstances('STORES_UPDATE', updated);
+      return updated;
+    });
     updateStoreInAppwrite(storeId, updates);
+
+    // Queue in premiumRequests for Admin Activation
+    setPremiumRequests(prev => {
+      const existingIdx = prev.findIndex(r => r.storeId === storeId && r.type === 'featured' && r.status === 'pending');
+      const reqItem: PremiumRequest = {
+        id: existingIdx >= 0 ? prev[existingIdx].id : 'req-feat-' + Date.now(),
+        storeId,
+        storeName: store?.name || 'Student Store',
+        ownerId: store?.ownerId || '',
+        ownerEmail: store?.ownerEmail || currentUser?.email || '',
+        type: 'featured',
+        amount: 2,
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+        notes: 'Featured Home Page Spotlight Request',
+      };
+      if (existingIdx >= 0) {
+        const copy = [...prev];
+        copy[existingIdx] = reqItem;
+        return copy;
+      }
+      return [reqItem, ...prev];
+    });
   };
 
   const requestPremiumTier = (storeId: string) => {
+    const store = stores.find(s => s.id === storeId);
     const updates = {
       premiumRequested: true,
       premiumRequestDate: new Date().toISOString(),
     };
-    setStores(prev =>
-      prev.map(s => (s.id === storeId ? { ...s, ...updates } : s))
-    );
+    setStores(prev => {
+      const updated = prev.map(s => (s.id === storeId ? { ...s, ...updates } : s));
+      try {
+        localStorage.setItem(STORAGE_KEYS.STORES, JSON.stringify(updated));
+      } catch {}
+      notifyInstances('STORES_UPDATE', updated);
+      return updated;
+    });
     updateStoreInAppwrite(storeId, updates);
+
+    // Queue in premiumRequests for Admin Activation
+    setPremiumRequests(prev => {
+      const existingIdx = prev.findIndex(r => r.storeId === storeId && r.type === 'premium' && r.status === 'pending');
+      const reqItem: PremiumRequest = {
+        id: existingIdx >= 0 ? prev[existingIdx].id : 'req-prem-' + Date.now(),
+        storeId,
+        storeName: store?.name || 'Student Store',
+        ownerId: store?.ownerId || '',
+        ownerEmail: store?.ownerEmail || currentUser?.email || '',
+        type: 'premium',
+        amount: 1,
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+        notes: 'Unlimited Items & 6-Photos Tier Request',
+      };
+      if (existingIdx >= 0) {
+        const copy = [...prev];
+        copy[existingIdx] = reqItem;
+        return copy;
+      }
+      return [reqItem, ...prev];
+    });
   };
 
   const approveFeaturedPromotion = (storeId: string) => {
@@ -949,10 +1111,34 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       featuredUntil,
     };
 
-    setStores(prev =>
-      prev.map(s => (s.id === storeId ? { ...s, ...updates } : s))
-    );
+    setStores(prev => {
+      const updated = prev.map(s => (s.id === storeId ? { ...s, ...updates } : s));
+      try {
+        localStorage.setItem(STORAGE_KEYS.STORES, JSON.stringify(updated));
+      } catch {}
+      notifyInstances('STORES_UPDATE', updated);
+      return updated;
+    });
     updateStoreInAppwrite(storeId, updates);
+
+    // Mark pending request as approved
+    setPremiumRequests(prev =>
+      prev.map(r => (r.storeId === storeId && r.type === 'featured') ? { ...r, status: 'approved', approvedAt: new Date().toISOString() } : r)
+    );
+
+    // Add / update active subscription
+    const newSub: Subscription = {
+      id: 'sub-feat-' + Date.now(),
+      storeId,
+      storeName: store.name,
+      ownerId: store.ownerId,
+      plan: 'featured',
+      status: 'active',
+      amount: 2,
+      startDate: new Date().toISOString(),
+      endDate: featuredUntil,
+    };
+    setSubscriptions(prev => [newSub, ...prev.filter(s => !(s.storeId === storeId && s.plan === 'featured'))]);
 
     const newEvent: AnalyticsEvent = {
       id: 'ev-' + Date.now(),
@@ -967,16 +1153,31 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
   };
 
   const rejectFeaturedPromotion = (storeId: string) => {
-    setStores(prev =>
-      prev.map(s => (s.id === storeId ? { ...s, featuredRequested: false } : s))
-    );
+    setStores(prev => {
+      const updated = prev.map(s => (s.id === storeId ? { ...s, featuredRequested: false } : s));
+      try {
+        localStorage.setItem(STORAGE_KEYS.STORES, JSON.stringify(updated));
+      } catch {}
+      notifyInstances('STORES_UPDATE', updated);
+      return updated;
+    });
     updateStoreInAppwrite(storeId, { featuredRequested: false });
+
+    // Mark pending request as rejected
+    setPremiumRequests(prev =>
+      prev.map(r => (r.storeId === storeId && r.type === 'featured' && r.status === 'pending') ? { ...r, status: 'rejected' } : r)
+    );
   };
 
   const revokeFeaturedPromotion = (storeId: string) => {
-    setStores(prev =>
-      prev.map(s => (s.id === storeId ? { ...s, isFeatured: false, featuredRequested: false } : s))
-    );
+    setStores(prev => {
+      const updated = prev.map(s => (s.id === storeId ? { ...s, isFeatured: false, featuredRequested: false } : s));
+      try {
+        localStorage.setItem(STORAGE_KEYS.STORES, JSON.stringify(updated));
+      } catch {}
+      notifyInstances('STORES_UPDATE', updated);
+      return updated;
+    });
     updateStoreInAppwrite(storeId, { isFeatured: false, featuredRequested: false });
   };
 
@@ -989,10 +1190,33 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       premiumRequested: false,
     };
 
-    setStores(prev =>
-      prev.map(s => (s.id === storeId ? { ...s, ...updates } : s))
-    );
+    setStores(prev => {
+      const updated = prev.map(s => (s.id === storeId ? { ...s, ...updates } : s));
+      try {
+        localStorage.setItem(STORAGE_KEYS.STORES, JSON.stringify(updated));
+      } catch {}
+      notifyInstances('STORES_UPDATE', updated);
+      return updated;
+    });
     updateStoreInAppwrite(storeId, updates);
+
+    // Mark pending request as approved
+    setPremiumRequests(prev =>
+      prev.map(r => (r.storeId === storeId && r.type === 'premium') ? { ...r, status: 'approved', approvedAt: new Date().toISOString() } : r)
+    );
+
+    // Add / update active subscription
+    const newSub: Subscription = {
+      id: 'sub-prem-' + Date.now(),
+      storeId,
+      storeName: store.name,
+      ownerId: store.ownerId,
+      plan: 'premium',
+      status: 'active',
+      amount: 1,
+      startDate: new Date().toISOString(),
+    };
+    setSubscriptions(prev => [newSub, ...prev.filter(s => !(s.storeId === storeId && s.plan === 'premium'))]);
 
     const newEvent: AnalyticsEvent = {
       id: 'ev-' + Date.now(),
@@ -1007,16 +1231,31 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
   };
 
   const rejectPremiumTier = (storeId: string) => {
-    setStores(prev =>
-      prev.map(s => (s.id === storeId ? { ...s, premiumRequested: false } : s))
-    );
+    setStores(prev => {
+      const updated = prev.map(s => (s.id === storeId ? { ...s, premiumRequested: false } : s));
+      try {
+        localStorage.setItem(STORAGE_KEYS.STORES, JSON.stringify(updated));
+      } catch {}
+      notifyInstances('STORES_UPDATE', updated);
+      return updated;
+    });
     updateStoreInAppwrite(storeId, { premiumRequested: false });
+
+    // Mark pending request as rejected
+    setPremiumRequests(prev =>
+      prev.map(r => (r.storeId === storeId && r.type === 'premium' && r.status === 'pending') ? { ...r, status: 'rejected' } : r)
+    );
   };
 
   const revokePremiumTier = (storeId: string) => {
-    setStores(prev =>
-      prev.map(s => (s.id === storeId ? { ...s, hasPremiumLimit: false, premiumRequested: false } : s))
-    );
+    setStores(prev => {
+      const updated = prev.map(s => (s.id === storeId ? { ...s, hasPremiumLimit: false, premiumRequested: false } : s));
+      try {
+        localStorage.setItem(STORAGE_KEYS.STORES, JSON.stringify(updated));
+      } catch {}
+      notifyInstances('STORES_UPDATE', updated);
+      return updated;
+    });
     updateStoreInAppwrite(storeId, { hasPremiumLimit: false, premiumRequested: false });
   };
 
@@ -1025,6 +1264,14 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
   };
 
   const upgradeToPremiumPhotos = (storeId: string) => {
+    approvePremiumTier(storeId);
+  };
+
+  const instantActivateFeatured = (storeId: string) => {
+    approveFeaturedPromotion(storeId);
+  };
+
+  const instantActivatePremium = (storeId: string) => {
     approvePremiumTier(storeId);
   };
 
@@ -1176,19 +1423,41 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     deleteProductInAppwrite(productId);
   };
 
-  // WhatsApp Click Tracking & URL Generator
+  // WhatsApp Link Builder (Pure URL, does not trigger popup or redirect)
+  const getWhatsAppUrl = (storeId: string, productId?: string, customNote?: string): string => {
+    const store = stores.find(s => s.id === storeId);
+    if (!store) return '#';
+
+    let productTitle = '';
+    if (productId) {
+      const prod = products.find(p => p.id === productId);
+      productTitle = prod?.title || '';
+    }
+
+    const cleanNumber = (store.whatsappNumber || '').replace(/[^0-9]/g, '');
+    let message = `Hi ${store.name}! I saw your store on HustleHub (${store.university}).`;
+    if (productTitle) {
+      message = `Hi ${store.name}! I saw your listing for "${productTitle}" on HustleHub (${store.university}). Is it still available?`;
+    }
+    if (customNote) {
+      message += ` ${customNote}`;
+    }
+
+    const encoded = encodeURIComponent(message);
+    return `https://wa.me/${cleanNumber}?text=${encoded}`;
+  };
+
+  // WhatsApp Click Tracking & URL Opener (Only invoked on explicit user click action)
   const trackWhatsAppClick = (storeId: string, productId?: string, customNote?: string): string => {
     const store = stores.find(s => s.id === storeId);
     if (!store) return '#';
 
     const newClicks = (store.whatsappClicks || 0) + 1;
-    // Increment store WhatsApp click counter
     setStores(prev =>
       prev.map(s => (s.id === storeId ? { ...s, whatsappClicks: newClicks } : s))
     );
     updateStoreInAppwrite(storeId, { whatsappClicks: newClicks });
 
-    // If on a specific product, increment product inquiries
     let productTitle = '';
     if (productId) {
       const prod = products.find(p => p.id === productId);
@@ -1204,7 +1473,6 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
       updateProductInAppwrite(productId, { whatsappInquiries: newInquiries });
     }
 
-    // Log analytics event
     const event: AnalyticsEvent = {
       id: 'ev-' + Date.now(),
       type: 'whatsapp_click',
@@ -1217,23 +1485,12 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     setAnalyticsEvents(prev => [event, ...prev]);
     createAnalyticsEventInAppwrite(event);
 
-    // Format WhatsApp phone number (clean spaces, dashes, parentheses)
-    const cleanNumber = store.whatsappNumber.replace(/[^0-9]/g, '');
-
-    // Construct polite, student-tailored default message
-    let message = `Hi ${store.name}! I saw your store on HustleHub (${store.university}).`;
-    if (productTitle) {
-      message = `Hi ${store.name}! I saw your listing for "${productTitle}" on HustleHub (${store.university}). Is it still available?`;
+    const waUrl = getWhatsAppUrl(storeId, productId, customNote);
+    try {
+      window.open(waUrl, '_blank', 'noopener,noreferrer');
+    } catch (e) {
+      console.warn('Could not open WhatsApp window', e);
     }
-    if (customNote) {
-      message += ` ${customNote}`;
-    }
-
-    const encoded = encodeURIComponent(message);
-    const waUrl = `https://wa.me/${cleanNumber}?text=${encoded}`;
-
-    // Open WhatsApp in a clean tab or app
-    window.open(waUrl, '_blank', 'noopener,noreferrer');
     return waUrl;
   };
 
@@ -1288,6 +1545,126 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
     .filter(e => e.amount)
     .reduce((acc, e) => acc + (e.amount || 0), 0);
 
+  // Live Notifications
+  const [notifications, setNotifications] = useState<AppwriteNotification[]>(() => {
+    try {
+      const saved = localStorage.getItem('hustlehub_notifications_live');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return [
+      {
+        id: 'notif-welcome',
+        title: 'Welcome to HustleHub!',
+        message: 'Discover student businesses and buy/sell textbooks, gadgets & services directly on campus.',
+        type: 'system',
+        isRead: false,
+        createdAt: new Date().toISOString(),
+      },
+    ];
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('hustlehub_notifications_live', JSON.stringify(notifications));
+    } catch {}
+  }, [notifications]);
+
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(() => {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      return Notification.permission;
+    }
+    return 'default';
+  });
+
+  const [isPushRegistered, setIsPushRegistered] = useState<boolean>(() => {
+    return localStorage.getItem('hustlehub_push_registered') === 'true';
+  });
+
+  const requestNotificationPermission = async (): Promise<boolean> => {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      try {
+        const perm = await Notification.requestPermission();
+        setNotificationPermission(perm);
+        if (perm === 'granted') {
+          setIsPushRegistered(true);
+          localStorage.setItem('hustlehub_push_registered', 'true');
+          return true;
+        }
+      } catch (e) {
+        console.warn('Notification permission error:', e);
+      }
+    }
+    return false;
+  };
+
+  const markNotificationAsRead = (id: string) => {
+    setNotifications(prev => prev.map(n => (n.id === id ? { ...n, isRead: true } : n)));
+  };
+
+  const markAllNotificationsAsRead = () => {
+    setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+  };
+
+  const unreadNotificationsCount = notifications.filter(n => !n.isRead).length;
+  const unreadNewProductsCount = notifications.filter(n => !n.isRead && n.type === 'new_product').length;
+
+  // Premium Requests & Subscriptions
+  const [premiumRequests, setPremiumRequests] = useState<PremiumRequest[]>(() => {
+    try {
+      const saved = localStorage.getItem('hustlehub_premium_requests_live');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return [];
+  });
+
+  const [subscriptions, setSubscriptions] = useState<Subscription[]>(() => {
+    try {
+      const saved = localStorage.getItem('hustlehub_subscriptions_live');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return [];
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('hustlehub_premium_requests_live', JSON.stringify(premiumRequests));
+    } catch {}
+  }, [premiumRequests]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('hustlehub_subscriptions_live', JSON.stringify(subscriptions));
+    } catch {}
+  }, [subscriptions]);
+
+  const instantApprovePremiumRequest = async (requestId: string): Promise<boolean> => {
+    const req = premiumRequests.find(r => r.id === requestId);
+    if (!req) return false;
+    setPremiumRequests(prev => prev.map(r => r.id === requestId ? { ...r, status: 'approved' as const, approvedAt: new Date().toISOString() } : r));
+    if (req.type === 'featured') {
+      approveFeaturedPromotion(req.storeId);
+    } else {
+      approvePremiumTier(req.storeId);
+    }
+    const newSub: Subscription = {
+      id: 'sub-' + Date.now(),
+      storeId: req.storeId,
+      storeName: req.storeName,
+      ownerId: req.ownerId,
+      plan: req.type,
+      status: 'active',
+      amount: req.amount,
+      startDate: new Date().toISOString(),
+    };
+    setSubscriptions(prev => [newSub, ...prev]);
+    return true;
+  };
+
+  const instantRejectPremiumRequest = async (requestId: string): Promise<boolean> => {
+    setPremiumRequests(prev => prev.map(r => r.id === requestId ? { ...r, status: 'rejected' as const } : r));
+    return true;
+  };
+
   return (
     <MarketplaceContext.Provider
       value={{
@@ -1300,6 +1677,7 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         loginBusinessWithPassword,
         loginWithOAuth,
         logout,
+        updateUserProfile,
         stores,
         currentStore,
         registerStore,
@@ -1321,12 +1699,15 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         revokePremiumTier,
         upgradeToFeatured,
         upgradeToPremiumPhotos,
+        instantActivateFeatured,
+        instantActivatePremium,
         products,
         addProduct,
         updateProduct,
         deleteProduct,
         syncProductToCloud,
         syncAllLocalProductsToCloud,
+        getWhatsAppUrl,
         trackWhatsAppClick,
         trackStoreView,
         trackProductView,
@@ -1359,6 +1740,18 @@ export const MarketplaceProvider: React.FC<{ children: React.ReactNode }> = ({ c
         testAppwrite,
         syncWithAppwrite,
         isAppwriteLive,
+        notifications,
+        unreadNotificationsCount,
+        unreadNewProductsCount,
+        markNotificationAsRead,
+        markAllNotificationsAsRead,
+        notificationPermission,
+        requestNotificationPermission,
+        isPushRegistered,
+        premiumRequests,
+        subscriptions,
+        instantApprovePremiumRequest,
+        instantRejectPremiumRequest,
       }}
     >
       {children}

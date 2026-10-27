@@ -85,7 +85,7 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
                 )}
               </div>
               <p className="text-xs text-slate-400">
-                Live Appwrite Realtime alerts & instant updates
+                Live alerts & campus updates
               </p>
             </div>
           </div>
@@ -135,9 +135,9 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
           <div className="px-4 py-2 bg-emerald-950/40 border-b border-emerald-800/40 flex items-center justify-between text-[11px] text-emerald-300">
             <span className="flex items-center gap-1.5">
               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Appwrite Messaging Push Active (FCM Target Registered)</span>
+              <span>Campus Push Notifications Active</span>
             </span>
-            <span className="text-[10px] text-slate-400">Topics: new-products</span>
+            <span className="text-[10px] text-slate-400">Live Campus Feed</span>
           </div>
         )}
 
@@ -152,7 +152,7 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
               </p>
             </div>
           ) : (
-            notifications.map((item) => {
+            notifications.map((item: AppwriteNotification) => {
               const isNewProduct = item.type === 'new_product';
               const isPremium = item.type === 'premium_approved' || item.type === 'featured_approved';
 
@@ -223,7 +223,7 @@ export const NotificationCenterModal: React.FC<NotificationCenterModalProps> = (
 
         {/* Footer */}
         <div className="p-3 bg-slate-950 border-t border-slate-800 text-center text-[11px] text-slate-500 flex items-center justify-between px-4">
-          <span>Appwrite Realtime Database Sync</span>
+          <span>Live Campus Updates</span>
           <button
             onClick={onClose}
             className="text-xs text-slate-400 hover:text-white cursor-pointer"
